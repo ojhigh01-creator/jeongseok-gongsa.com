@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    font-family: "Pretendard Variable", Pretendard, "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    word-break: keep-all;
+    overflow-wrap: break-word;
+  }
+}
+
+.responsive-headline {
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
+.font-mono-num {
+  font-family: "JetBrains Mono", "Pretendard Variable", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes aiScanTransform {
+  0% {
+    transform: translateY(0%);
+    opacity: 0.9;
+  }
+  50% {
+    transform: translateY(220px);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(0%);
+    opacity: 0.9;
+  }
+}
+
+.animate-ai-scan {
+  animation: aiScanTransform 2.2s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-ai-scan {
+    animation: none;
+  }
+}

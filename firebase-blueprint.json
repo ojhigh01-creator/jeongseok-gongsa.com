@@ -1,0 +1,70 @@
+{
+  "entities": {
+    "GalleryConfig": {
+      "title": "GalleryConfig",
+      "description": "Main configuration document holding the construction services gallery structure and photo metadata.",
+      "type": "object",
+      "properties": {
+        "servicesJson": {
+          "type": "string",
+          "description": "JSON serialized array of ServiceItem objects where base64 photo URLs are stored in gallery_photos collection."
+        },
+        "updatedAt": {
+          "type": "number",
+          "description": "Timestamp in milliseconds when the gallery was last updated."
+        },
+        "updatedBy": {
+          "type": "string",
+          "description": "Identifier of the client/session that updated the gallery."
+        }
+      },
+      "required": ["servicesJson", "updatedAt"]
+    },
+    "GalleryPhoto": {
+      "title": "GalleryPhoto",
+      "description": "Individual optimized real construction photo document stored separately to stay well within Firestore 1MB limit.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique photo slot ID."
+        },
+        "serviceId": {
+          "type": "string",
+          "description": "ID of the construction service category."
+        },
+        "dataUrl": {
+          "type": "string",
+          "description": "Optimized JPEG base64 Data URL (1200x900, quality 0.78)."
+        },
+        "subtitle": {
+          "type": "string",
+          "description": "Photo subtitle description."
+        },
+        "specNote": {
+          "type": "string",
+          "description": "Photo technical specification note."
+        },
+        "updatedAt": {
+          "type": "number",
+          "description": "Timestamp in milliseconds when the photo was uploaded or updated."
+        }
+      },
+      "required": ["id", "dataUrl", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/gallery_config/{configId}": {
+      "schema": {
+        "$ref": "#/entities/GalleryConfig"
+      },
+      "description": "Stores the global gallery configuration shared across all visitors in real time."
+    },
+    "/gallery_photos/{photoId}": {
+      "schema": {
+        "$ref": "#/entities/GalleryPhoto"
+      },
+      "description": "Stores individual base64 construction photos referenced by gallery_config/main."
+    }
+  }
+}

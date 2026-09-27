@@ -1,0 +1,37 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions for validation
+    function isValidGalleryConfig(data) {
+      return data.keys().hasAll(['servicesJson', 'updatedAt'])
+        && data.servicesJson is string
+        && data.servicesJson.size() > 0
+        && data.servicesJson.size() < 900000
+        && data.updatedAt is number;
+    }
+
+    function isValidGalleryPhoto(data) {
+      return data.keys().hasAll(['id', 'dataUrl', 'updatedAt'])
+        && data.id is string
+        && data.id.size() > 0
+        && data.id.size() < 200
+        && data.dataUrl is string
+        && data.dataUrl.size() > 0
+        && data.dataUrl.size() < 950000
+        && data.updatedAt is number;
+    }
+
+    // Public read for all site visitors; validated write for gallery management
+    match /gallery_config/{configId} {
+      allow read: if true;
+      allow create, update: if configId == 'main' && isValidGalleryConfig(request.resource.data);
+      allow delete: if configId == 'main';
+    }
+
+    match /gallery_photos/{photoId} {
+      allow read: if true;
+      allow create, update: if isValidGalleryPhoto(request.resource.data);
+      allow delete: if true;
+    }
+  }
+}
