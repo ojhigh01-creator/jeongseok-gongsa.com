@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://jeongseok-gongsa-com.vercel.app/sitemap.xml
