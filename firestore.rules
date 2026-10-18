@@ -33,5 +33,22 @@ service cloud.firestore {
       allow create, update: if isValidGalleryPhoto(request.resource.data);
       allow delete: if true;
     }
+
+    // Jeongseok Membership & Paid Estimate System rules
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    match /tickets/{ticketId} {
+      allow read, write: if true;
+    }
+
+    match /supply_orders/{orderId} {
+      allow read, write: if true;
+    }
+
+    match /user_estimates/{estimateId} {
+      allow read, write: if true;
+    }
   }
 }

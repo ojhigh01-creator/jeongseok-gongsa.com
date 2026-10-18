@@ -19,6 +19,10 @@ import {
   Eye,
   Info,
   Upload,
+  ShoppingBag,
+  User,
+  Ticket,
+  Sparkles,
 } from 'lucide-react';
 import {
   SERVICE_TABS,
@@ -32,6 +36,11 @@ import {
 import { AiEstimateSimulator } from './components/AiEstimateSimulator';
 import { SelfEstimateModal, ConsultationModal } from './components/Modals';
 import { GalleryManagerModal } from './components/GalleryManagerModal';
+import { SuppliesStoreModal } from './components/SuppliesStoreModal';
+import { MemberModal } from './components/MemberModal';
+import { getCurrentMember } from './utils/memberStorage';
+import { MemberProfile } from './types/membership';
+import { SUPPLIES_DATA } from './data/suppliesData';
 import {
   loadCustomGallery,
   saveCustomGallery,
@@ -156,6 +165,17 @@ export default function App() {
   const [consultModalOpen, setConsultModalOpen] = useState<boolean>(false);
   const [consultNote, setConsultNote] = useState<string>('');
   const [consultCategory, setConsultCategory] = useState<string>('철거 · 원상복구');
+
+  // 1,000 KRW Membership & Supplies Store State
+  const [currentMember, setCurrentMember] = useState<MemberProfile | null>(() => getCurrentMember());
+  const [suppliesStoreOpen, setSuppliesStoreOpen] = useState<boolean>(false);
+  const [memberModalOpen, setMemberModalOpen] = useState<boolean>(false);
+  const [memberModalTab, setMemberModalTab] = useState<'profile' | 'tickets' | 'estimates' | 'orders'>('profile');
+
+  const handleOpenMemberModal = (tab: 'profile' | 'tickets' | 'estimates' | 'orders' = 'profile') => {
+    setMemberModalTab(tab);
+    setMemberModalOpen(true);
+  };
 
   const filteredServices = useMemo(() => {
     if (activeServiceTab === 'all') return servicesList;
@@ -583,29 +603,31 @@ export default function App() {
             정석공사 | 철거·원상복구·인테리어 전문
           </a>
 
-          {/* Zone 2: 4 Clean Navigation Links matching IA 100% */}
+          {/* Zone 2: Clean Navigation Links */}
           <nav
             aria-label="주요 메뉴"
-            className="hidden lg:flex items-center gap-7 text-sm font-medium text-slate-600"
+            className="hidden lg:flex items-center gap-6 text-sm font-medium text-slate-600"
           >
             <a
               href="#ai-estimate"
-              className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap"
+              className="flex items-center gap-1.5 hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap font-bold"
             >
-              AI 사진 견적
+              <span>AI 사진 견적</span>
+              <span className="px-1.5 py-0.2 text-[10px] font-bold bg-orange-100 text-orange-700 rounded border border-orange-200">
+                1,000원
+              </span>
             </a>
 
             <button
               type="button"
-              onClick={() =>
-                handleOpenConsultation(
-                  '[상단 GNB 공사 상담 요청] 실시간 1:1 정석 견적 및 공정 상담 희망',
-                  '철거 · 원상복구'
-                )
-              }
-              className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap cursor-pointer"
+              onClick={() => setSuppliesStoreOpen(true)}
+              className="flex items-center gap-1.5 hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap cursor-pointer font-bold text-slate-800"
             >
-              공사 상담
+              <ShoppingBag className="w-4 h-4 text-orange-600" />
+              <span>생활관리용품</span>
+              <span className="px-1.5 py-0.2 text-[10px] font-bold bg-amber-100 text-amber-800 rounded">
+                회원할인
+              </span>
             </button>
 
             {/* 공사 서비스 Dropdown with IA Sub-items */}
@@ -625,7 +647,7 @@ export default function App() {
               </button>
 
               {serviceDropdownOpen && (
-                <div className="absolute left-0 top-full w-64 rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+                <div className="absolute left-0 top-full w-64 rounded-xl border border-slate-200 bg-white p-2 shadow-lg z-50">
                   <button
                     type="button"
                     onClick={() => handleSelectServiceFromNav('demolition')}
@@ -678,6 +700,13 @@ export default function App() {
             </div>
 
             <a
+              href="#services"
+              className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap"
+            >
+              시공 갤러리
+            </a>
+
+            <a
               href="#about"
               className="hover:text-slate-900 hover:underline underline-offset-4 transition-colors whitespace-nowrap"
             >
@@ -685,15 +714,32 @@ export default function App() {
             </a>
           </nav>
 
-          {/* Zone 3: 2 Primary Actions + Mobile Menu Button */}
-          <div className="flex items-center gap-2.5">
-            <a
-              href="#ai-estimate"
-              className="hidden sm:inline-flex items-center gap-1.5 rounded-lg bg-orange-600 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-orange-500 whitespace-nowrap"
+          {/* Zone 3: Member status, Store, Phone consultation & Mobile toggle */}
+          <div className="flex items-center gap-2">
+            {/* Member Profile & Tickets Button */}
+            <button
+              type="button"
+              onClick={() => handleOpenMemberModal('profile')}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-bold text-slate-800 hover:border-orange-500 hover:text-orange-600 transition-colors whitespace-nowrap cursor-pointer shadow-xs"
             >
-              <Camera className="h-3.5 w-3.5" />
-              AI 사진 30초 견적
-            </a>
+              <User className="h-3.5 w-3.5 text-orange-600" />
+              <span>
+                {currentMember
+                  ? `${currentMember.name} (${currentMember.ticketBalance || 0}장)`
+                  : '1,000원 회원 / 로그인'}
+              </span>
+            </button>
+
+            {/* Quick Supplies Store Button */}
+            <button
+              type="button"
+              onClick={() => setSuppliesStoreOpen(true)}
+              className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-900 hover:bg-amber-100 transition-colors whitespace-nowrap cursor-pointer"
+            >
+              <ShoppingBag className="h-3.5 w-3.5 text-orange-600" />
+              <span>생활관리용품</span>
+            </button>
+
             <button
               type="button"
               onClick={() =>
@@ -702,10 +748,10 @@ export default function App() {
                   '철거 · 원상복구'
                 )
               }
-              className="hidden md:inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-slate-800 whitespace-nowrap"
+              className="hidden md:inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-slate-800 whitespace-nowrap"
             >
               <Phone className="h-3.5 w-3.5 text-orange-400" />
-              24시 직통상담
+              <span>{DIRECT_PHONE}</span>
             </button>
 
             <button
@@ -723,12 +769,55 @@ export default function App() {
         {mobileMenuOpen && (
           <div className="border-t border-slate-200 bg-white px-4 py-4 lg:hidden">
             <div className="flex flex-col space-y-2 text-sm font-semibold text-slate-800">
+              {/* Mobile Member Status & Recharge */}
+              <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold text-orange-900 flex items-center gap-1.5">
+                    <User className="w-3.5 h-3.5 text-orange-600" />
+                    {currentMember ? `${currentMember.name}님` : '1,000원 유료회원 안내'}
+                  </div>
+                  <div className="text-[11px] text-slate-600 mt-0.5">
+                    {currentMember
+                      ? `보유 AI 견적 이용권: ${currentMember.ticketBalance || 0}장`
+                      : '사진 견적 1회 1,000원 · 용품 26% 할인'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    handleOpenMemberModal(currentMember ? 'tickets' : 'profile');
+                  }}
+                  className="px-2.5 py-1 bg-orange-600 text-white rounded text-xs font-bold shrink-0"
+                >
+                  {currentMember ? '이용권 충전' : '로그인/가입'}
+                </button>
+              </div>
+
+              {/* Mobile Supplies Store */}
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  setSuppliesStoreOpen(true);
+                }}
+                className="flex items-center justify-between rounded-lg px-3 py-2 text-left bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-900 font-bold"
+              >
+                <span className="flex items-center gap-2">
+                  <ShoppingBag className="w-4 h-4 text-orange-600" />
+                  생활관리용품 직영 스토어
+                </span>
+                <span className="text-[10px] bg-orange-600 text-white px-1.5 py-0.5 rounded">
+                  회원할인
+                </span>
+              </button>
+
               <a
                 href="#ai-estimate"
                 onClick={() => setMobileMenuOpen(false)}
                 className="rounded-lg px-3 py-2 hover:bg-slate-50"
               >
-                1. AI 사진 견적 (/ai-estimate)
+                1. AI 사진 견적 (1,000원 이용권)
               </a>
               <button
                 type="button"
@@ -855,13 +944,106 @@ export default function App() {
             </div>
           </div>
 
-          {/* Interactive AI Photo Upload Simulator (Pumsem-based, No Before/After Slider) */}
+          {/* Interactive AI Photo Upload Simulator (1,000 KRW Paid Member Verification & Pumsem Engine) */}
           <AiEstimateSimulator
             selectedCategoryFromService={aiSimulatorCategory}
             servicesList={servicesList}
             onOpenCalculator={handleOpenCalculator}
             onOpenConsultation={handleOpenConsultation}
+            currentMember={currentMember}
+            onOpenMemberModal={handleOpenMemberModal}
+            onMemberUpdated={setCurrentMember}
           />
+        </div>
+      </section>
+
+      {/* 2.5 Section: 건우 정석공사 생활관리용품 직영 스토어 */}
+      <section id="supplies-store" className="py-16 bg-slate-100/70 border-b border-slate-200">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end border-b border-slate-200 pb-6">
+            <div>
+              <div className="flex items-center gap-2 text-xs font-semibold text-orange-600">
+                <ShoppingBag className="w-4 h-4" />
+                <span>정석공사 현장 마스터 엄선 직영 자재</span>
+                <span aria-hidden="true">·</span>
+                <span className="text-emerald-600 font-bold">1,000원 유료회원 전품목 최대 26% 할인</span>
+              </div>
+              <h2 className="mt-2 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
+                전문가용 생활관리 및 긴급 보수용품 스토어
+              </h2>
+              <p className="mt-1 text-sm text-slate-600">
+                실제 시공 현장에서 검증된 고성능 방수제, 곰팡이 방지 바이오 실리콘, 배관 용해 세정제를 합리적인 가격에 직영 공급합니다.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSuppliesStoreOpen(true)}
+              className="inline-flex items-center gap-2 rounded-xl bg-orange-600 px-5 py-3 text-xs font-bold text-white shadow-md hover:bg-orange-500 transition-colors shrink-0 cursor-pointer"
+            >
+              <ShoppingBag className="w-4 h-4" />
+              <span>전체 생활관리용품 스토어 열기</span>
+            </button>
+          </div>
+
+          <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            {SUPPLIES_DATA.slice(0, 3).map((product) => {
+              const displayPrice =
+                currentMember?.tier === 'paid_member' ? product.memberPrice : product.regularPrice;
+              return (
+                <div
+                  key={product.id}
+                  className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs hover:border-orange-300 hover:shadow-md transition-all flex flex-col justify-between"
+                >
+                  <div className="relative h-44 bg-slate-100 overflow-hidden">
+                    <img
+                      src={product.imageUrl}
+                      alt={product.name}
+                      className="w-full h-full object-cover"
+                    />
+                    <div className="absolute top-3 left-3 bg-slate-900/80 backdrop-blur-sm text-white px-2.5 py-0.5 rounded text-xs font-medium">
+                      {product.categoryLabel}
+                    </div>
+                    {product.discountPct > 0 && (
+                      <div className="absolute top-3 right-3 bg-orange-600 text-white px-2.5 py-0.5 rounded text-xs font-bold shadow">
+                        회원 {product.discountPct}% OFF
+                      </div>
+                    )}
+                  </div>
+                  <div className="p-5 flex-1 flex flex-col justify-between">
+                    <div>
+                      <h3 className="font-bold text-slate-900 text-sm">{product.name}</h3>
+                      <p className="text-xs text-slate-500 mt-1 line-clamp-2">{product.summary}</p>
+                      <div className="mt-3 text-[11px] text-emerald-800 bg-emerald-50 p-2 rounded border border-emerald-100">
+                        <strong>정석 팁:</strong> {product.engineerTip}
+                      </div>
+                    </div>
+                    <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
+                      <div>
+                        <div className="text-xs text-slate-600 line-through">
+                          {product.regularPrice.toLocaleString()}원
+                        </div>
+                        <div className="text-base font-extrabold text-orange-600 font-mono">
+                          {displayPrice.toLocaleString()}원
+                          {currentMember?.tier === 'paid_member' && (
+                            <span className="text-[10px] text-emerald-600 ml-1 font-sans font-bold">
+                              회원가
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSuppliesStoreOpen(true)}
+                        className="px-3.5 py-2 bg-slate-900 hover:bg-orange-600 text-white text-xs font-bold rounded-lg transition-colors cursor-pointer"
+                      >
+                        주문하기
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       </section>
 
@@ -1767,6 +1949,23 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* 1,000 KRW Member Management & Ticket Recharge Modal */}
+      <MemberModal
+        isOpen={memberModalOpen}
+        onClose={() => setMemberModalOpen(false)}
+        currentMember={currentMember}
+        onMemberUpdated={setCurrentMember}
+        defaultTab={memberModalTab}
+      />
+
+      {/* Living Care Supplies Store Modal */}
+      <SuppliesStoreModal
+        isOpen={suppliesStoreOpen}
+        onClose={() => setSuppliesStoreOpen(false)}
+        currentMember={currentMember}
+        onOpenMemberModal={() => handleOpenMemberModal('profile')}
+      />
     </div>
   );
 }

@@ -51,6 +51,75 @@
         }
       },
       "required": ["id", "dataUrl", "updatedAt"]
+    },
+    "MemberProfile": {
+      "title": "MemberProfile",
+      "description": "Customer member profile tracking 1,000 KRW paid membership status and estimate ticket balance.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "phone": { "type": "string" },
+        "name": { "type": "string" },
+        "tier": { "type": "string", "enum": ["regular", "paid_member"] },
+        "ticketBalance": { "type": "number" },
+        "totalTicketsPurchased": { "type": "number" },
+        "totalSavedEstimates": { "type": "number" },
+        "totalOrdersCount": { "type": "number" },
+        "joinedAt": { "type": "number" },
+        "lastLoginAt": { "type": "number" }
+      },
+      "required": ["id", "phone", "name", "tier", "ticketBalance"]
+    },
+    "EstimateTicket": {
+      "title": "EstimateTicket",
+      "description": "1,000 KRW single-use AI estimate ticket record.",
+      "type": "object",
+      "properties": {
+        "ticketId": { "type": "string" },
+        "token": { "type": "string" },
+        "userId": { "type": "string" },
+        "userPhone": { "type": "string" },
+        "userName": { "type": "string" },
+        "amount": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "used", "refunded"] },
+        "paymentMethod": { "type": "string" },
+        "paymentOrderId": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "usedAt": { "type": "number" }
+      },
+      "required": ["ticketId", "token", "userId", "userPhone", "amount", "status", "createdAt"]
+    },
+    "SupplyOrder": {
+      "title": "SupplyOrder",
+      "description": "Customer order for Jeongseok living care maintenance products.",
+      "type": "object",
+      "properties": {
+        "orderId": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userPhone": { "type": "string" },
+        "deliveryAddress": { "type": "string" },
+        "detailAddress": { "type": "string" },
+        "finalAmount": { "type": "number" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["orderId", "userId", "userName", "userPhone", "deliveryAddress", "finalAmount", "status", "createdAt"]
+    },
+    "StoredEstimate": {
+      "title": "StoredEstimate",
+      "description": "User saved AI estimate result.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "category": { "type": "string" },
+        "pyeong": { "type": "number" },
+        "totalEstimateMin": { "type": "number" },
+        "totalEstimateMax": { "type": "number" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "userId", "category", "pyeong", "totalEstimateMin", "totalEstimateMax", "createdAt"]
     }
   },
   "firestore": {
@@ -65,6 +134,30 @@
         "$ref": "#/entities/GalleryPhoto"
       },
       "description": "Stores individual base64 construction photos referenced by gallery_config/main."
+    },
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/MemberProfile"
+      },
+      "description": "User profile with paid membership status and ticket balance."
+    },
+    "/tickets/{ticketId}": {
+      "schema": {
+        "$ref": "#/entities/EstimateTicket"
+      },
+      "description": "AI estimate ticket vouchers."
+    },
+    "/supply_orders/{orderId}": {
+      "schema": {
+        "$ref": "#/entities/SupplyOrder"
+      },
+      "description": "Living care supplies orders."
+    },
+    "/user_estimates/{estimateId}": {
+      "schema": {
+        "$ref": "#/entities/StoredEstimate"
+      },
+      "description": "User saved estimate history."
     }
   }
 }

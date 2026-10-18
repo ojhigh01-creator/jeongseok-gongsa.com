@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo } from 'react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
 import {
   Camera,
   Upload,
@@ -8,7 +8,6 @@ import {
   RefreshCw,
   Wrench,
   FileCheck2,
-  Ruler,
   AlertTriangle,
   Plus,
   Trash2,
@@ -16,19 +15,37 @@ import {
   Smartphone,
   Images,
   Info,
+  Phone,
+  ShieldCheck,
+  ChevronRight,
+  RotateCcw,
+  Ticket,
+  Lock,
 } from 'lucide-react';
 import {
   SAMPLE_PHOTO_PRESETS,
   SERVICES_DATA,
+  SERVICE_TABS,
   ServiceCategoryKey,
   ServiceItem,
   HERO_VISUAL,
+  DIRECT_PHONE,
 } from '../data/constructionData';
 import {
   processImageFileWithSpecs,
   validateImageFileBeforeUpload,
   PHOTO_UPLOAD_SPECS,
 } from '../utils/galleryStorage';
+import {
+  calculatePumsemEstimate,
+  PumsemCalculationResult,
+} from '../utils/pumsemCalculator';
+import { MemberProfile } from '../types/membership';
+import {
+  getMemberActiveTickets,
+  markTicketUsed,
+  saveEstimate,
+} from '../utils/memberStorage';
 
 interface UploadedPhoto {
   id: string;
@@ -38,89 +55,85 @@ interface UploadedPhoto {
   isPortrait: boolean;
 }
 
-interface CustomWorkPreset {
-  workTitle: string;
-  sizeSpec: string;
-  defaultPyeong: number;
-  pumsemChapter: string;
-  pumsemBasis: string;
+export interface GeminiAiAnalysis {
+  detectedCategory: ServiceCategoryKey | string;
+  categoryConfidence: number;
+  surfaceCondition: string;
+  damageSeverity: '경미' | '보통' | '심각' | string;
+  detectedElements: string[];
+  recommendedScope: string[];
+  uncertainItems: string[];
+  wasteTonsEstimated: string;
+  siteKeyRisk: string;
 }
 
-const CUSTOM_WORK_EXAMPLES: CustomWorkPreset[] = [
-  {
-    workTitle: '아스팔트 싱글 지붕 강풍 파손 보수 및 방수시트 재시공',
-    sizeSpec: '지붕 경사면 가로 6.5m × 세로 4.2m (약 8.5평), 용마루 6.5m',
-    defaultPyeong: 9,
-    pumsemChapter: '건설공사 표준품셈 건축부문 제11장 (지붕 및 홈통공사 - 아스팔트 싱글 잇기)',
-    pumsemBasis: '방수시트 바탕 깔기 + 아스팔트 싱글 잇기(지붕공 0.18품/㎡) 및 자재 할증 5% 적용',
-  },
-  {
-    workTitle: '콘크리트 블럭 담장 균열 철거 및 조적·미장 재시공',
-    sizeSpec: '담장 연장 길이 14m × 높이 1.8m (6인치 시멘트 블럭 조적 및 양면 몰탈 미장)',
-    defaultPyeong: 8,
-    pumsemChapter: '건설공사 표준품셈 건축부문 제4장 (조적공사 - 시멘트블록 쌓기) · 제8장 (미장공사)',
-    pumsemBasis: '기초 줄파기 + 6인치 블록 쌓기(조적공 0.16품/㎡) + 양면 시멘트 모르타르 바름(미장공 0.14품/㎡) 및 블록 할증 4% 적용',
-  },
-  {
-    workTitle: '상가 출입구 노후 계단 파손 보수 및 논슬립·화강석 타일 재시공',
-    sizeSpec: '계단 폭 2.4m × 디딤판 12단 (챌판 포함), 황동 논슬립 바 시공',
-    defaultPyeong: 6,
-    pumsemChapter: '건설공사 표준품셈 건축부문 제5장 (석공사) · 제10장 (타일공사) · 제7장 (금속 논슬립)',
-    pumsemBasis: '계단 디딤판·챌판 석재/타일 붙임(석공·타일공 0.25품/㎡) 및 논슬립 매립 품셈 적용',
-  },
-];
-
-const MAX_UPLOAD_PHOTOS = 10;
+const MAX_UPLOAD_PHOTOS = 5;
 
 interface AiEstimateSimulatorProps {
   selectedCategoryFromService?: ServiceCategoryKey;
   servicesList?: ServiceItem[];
   onOpenCalculator: (category: ServiceCategoryKey, pyeong: number) => void;
   onOpenConsultation: (summary: string, categoryLabel: string) => void;
+  currentMember?: MemberProfile | null;
+  onOpenMemberModal?: (defaultTab?: 'profile' | 'tickets' | 'estimates') => void;
+  onMemberUpdated?: (member: MemberProfile | null) => void;
 }
+
+type SimulatorStep = 'input' | 'analyzing' | 'result';
 
 export const AiEstimateSimulator: React.FC<AiEstimateSimulatorProps> = ({
   selectedCategoryFromService,
   servicesList = SERVICES_DATA,
   onOpenCalculator,
   onOpenConsultation,
+  currentMember = null,
+  onOpenMemberModal,
+  onMemberUpdated,
 }) => {
+  // Step State
+  const [currentStep, setCurrentStep] = useState<SimulatorStep>('input');
+
+  // Selected Category & Presets
+  const [activeCategory, setActiveCategory] = useState<ServiceCategoryKey>(
+    selectedCategoryFromService && selectedCategoryFromService !== 'all'
+      ? selectedCategoryFromService
+      : 'demolition'
+  );
   const [activePresetId, setActivePresetId] = useState<string>(SAMPLE_PHOTO_PRESETS[0].id);
+
+  // Uploaded Photos
   const [uploadedPhotos, setUploadedPhotos] = useState<UploadedPhoto[]>([]);
   const [activeUploadedIndex, setActiveUploadedIndex] = useState<number>(0);
   const [uploadNotice, setUploadNotice] = useState<string>('');
   const [uploadError, setUploadError] = useState<string>('');
   const [isProcessingUpload, setIsProcessingUpload] = useState<boolean>(false);
-
-  // Custom user work description & real size input
-  const [customWorkInput, setCustomWorkInput] = useState<string>('');
-  const [customSizeInput, setCustomSizeInput] = useState<string>('');
-  const [customPumsemOverride, setCustomPumsemOverride] = useState<{
-    chapter: string;
-    basis: string;
-  } | null>(null);
-  const [isCustomWorkApplied, setIsCustomWorkApplied] = useState<boolean>(false);
-
-  const [pyeong, setPyeong] = useState<number>(SAMPLE_PHOTO_PRESETS[0].defaultPyeong);
-  const [scanState, setScanState] = useState<'idle' | 'scanning' | 'completed'>('completed');
-  const [scanProgress, setScanProgress] = useState<number>(100);
-  const [brokenPhotoIds, setBrokenPhotoIds] = useState<Record<string, boolean>>({});
   const [fitContainMode, setFitContainMode] = useState<boolean>(false);
+  const [brokenPhotoIds, setBrokenPhotoIds] = useState<Record<string, boolean>>({});
 
-  // Separate refs for Album multi-select vs Smartphone direct rear camera capture
+  // Site Conditions
+  const [pyeong, setPyeong] = useState<number>(25);
+  const [floor, setFloor] = useState<string>('1층');
+  const [hasElevator, setHasElevator] = useState<boolean>(true);
+  const [additionalNotes, setAdditionalNotes] = useState<string>('');
+
+  // AI & Calculation Output
+  const [aiAnalysis, setAiAnalysis] = useState<GeminiAiAnalysis | null>(null);
+  const [calculationResult, setCalculationResult] = useState<PumsemCalculationResult | null>(null);
+  const [analysisError, setAnalysisError] = useState<string>('');
+  const [apiKeyNotice, setApiKeyNotice] = useState<string>('');
+
+  // File Input Refs
   const albumInputRef = useRef<HTMLInputElement | null>(null);
   const cameraCaptureInputRef = useRef<HTMLInputElement | null>(null);
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (selectedCategoryFromService && selectedCategoryFromService !== 'all') {
+      setActiveCategory(selectedCategoryFromService);
       const matchedPreset =
         SAMPLE_PHOTO_PRESETS.find((p) => p.category === selectedCategoryFromService) ||
         SAMPLE_PHOTO_PRESETS[0];
       setActivePresetId(matchedPreset.id);
-      setIsCustomWorkApplied(false);
-      setCustomPumsemOverride(null);
       setPyeong(matchedPreset.defaultPyeong);
-      triggerAiScan();
     }
   }, [selectedCategoryFromService]);
 
@@ -131,118 +144,28 @@ export const AiEstimateSimulator: React.FC<AiEstimateSimulatorProps> = ({
 
   const matchedService = useMemo(
     () =>
-      servicesList.find((s) => s.category === activePreset.category) ||
+      servicesList.find((s) => s.category === activeCategory) ||
       servicesList[0] ||
       SERVICES_DATA[0],
-    [activePreset, servicesList]
+    [activeCategory, servicesList]
   );
 
-  // 건설공사 표준품셈 (국토교통부/건설부 제정 기준) 및 대한건설협회 시중노임단가 기반 산출
-  const estimatedReport = useMemo(() => {
-    const scaleFactor = pyeong / 10;
-    const skilledPum = Number(
-      (matchedService.pumsem.skilledLaborPer10Pyeong * scaleFactor).toFixed(1)
-    );
-    const generalPum = Number(
-      (matchedService.pumsem.generalLaborPer10Pyeong * scaleFactor).toFixed(1)
-    );
-    const totalPum = Number((skilledPum + generalPum).toFixed(1));
+  // Current Photo for Analysis
+  const currentUploadedPhoto =
+    uploadedPhotos.length > 0
+      ? uploadedPhotos[Math.min(activeUploadedIndex, uploadedPhotos.length - 1)]
+      : null;
 
-    const baseTotal = matchedService.minFlatCost + pyeong * matchedService.basePricePerPyeong;
-    const minPrice = Math.round(baseTotal * 0.96);
-    const maxPrice = Math.round(baseTotal * 1.08);
-    const materialCost = Math.round(
-      baseTotal * 0.42 * (1 + matchedService.pumsem.materialAllowancePct / 100)
-    );
-    const laborCost = Math.round(baseTotal * 0.4);
-    const wasteAndEquipCost = Math.max(20, baseTotal - Math.round(baseTotal * 0.42) - laborCost);
+  const currentPhotoKey = currentUploadedPhoto?.id || activePreset.id;
+  const isCurrentBroken = brokenPhotoIds[currentPhotoKey] || false;
 
-    const appliedChapter =
-      isCustomWorkApplied && customPumsemOverride
-        ? customPumsemOverride.chapter
-        : isCustomWorkApplied
-        ? '건설공사 표준품셈 건축·토목·설비 해당 공종 일위대가 및 시중노임단가 복합 적용'
-        : matchedService.pumsem.chapterCode;
+  const displayImage =
+    currentUploadedPhoto?.url ||
+    matchedService.photos[0]?.url ||
+    activePreset.image ||
+    HERO_VISUAL;
 
-    const appliedBasis =
-      isCustomWorkApplied && customPumsemOverride
-        ? customPumsemOverride.basis
-        : isCustomWorkApplied
-        ? `고객 입력 공정(${customWorkInput}) 및 실측 치수(${
-            customSizeInput || `${pyeong}평 환산`
-          }) 기준 기능공·보통인부 표준 품수 산정`
-        : matchedService.pumsem.basisDescription;
-
-    return {
-      minPrice,
-      maxPrice,
-      materialCost,
-      laborCost,
-      wasteAndEquipCost,
-      skilledPum,
-      generalPum,
-      totalPum,
-      appliedChapter,
-      appliedBasis,
-    };
-  }, [
-    matchedService,
-    pyeong,
-    isCustomWorkApplied,
-    customPumsemOverride,
-    customWorkInput,
-    customSizeInput,
-  ]);
-
-  const triggerAiScan = () => {
-    setScanState('scanning');
-    setScanProgress(18);
-    const t1 = setTimeout(() => setScanProgress(56), 250);
-    const t2 = setTimeout(() => setScanProgress(89), 550);
-    const t3 = setTimeout(() => {
-      setScanProgress(100);
-      setScanState('completed');
-    }, 900);
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-      clearTimeout(t3);
-    };
-  };
-
-  const handleSelectPreset = (presetId: string) => {
-    const found = SAMPLE_PHOTO_PRESETS.find((p) => p.id === presetId);
-    if (!found) return;
-    setActivePresetId(presetId);
-    setIsCustomWorkApplied(false);
-    setCustomPumsemOverride(null);
-    setPyeong(found.defaultPyeong);
-    triggerAiScan();
-  };
-
-  const handleApplyCustomExample = (example: CustomWorkPreset) => {
-    setCustomWorkInput(example.workTitle);
-    setCustomSizeInput(example.sizeSpec);
-    setCustomPumsemOverride({
-      chapter: example.pumsemChapter,
-      basis: example.pumsemBasis,
-    });
-    setPyeong(example.defaultPyeong);
-    setIsCustomWorkApplied(true);
-    triggerAiScan();
-  };
-
-  const handleApplyUserCustomInput = () => {
-    if (!customWorkInput.trim()) return;
-    setCustomPumsemOverride(null);
-    setIsCustomWorkApplied(true);
-    triggerAiScan();
-  };
-
-  /**
-   * 스마트폰 카메라 촬영본(HEIC/고화소 JPG/빈 MIME 타입) 및 앨범 다중 선택 사진을
-   * 메모리 크래시나 회전 오류 없이 안전하게 변환하여 등록합니다.
-   */
+  // Handle Photo Selection
   const handleFilesSelected = async (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
 
@@ -250,7 +173,7 @@ export const AiEstimateSimulator: React.FC<AiEstimateSimulatorProps> = ({
     const remainingSlots = MAX_UPLOAD_PHOTOS - uploadedPhotos.length;
 
     if (remainingSlots <= 0) {
-      setUploadError(`사진은 최대 ${MAX_UPLOAD_PHOTOS}장까지만 업로드할 수 있습니다.`);
+      setUploadError(`사진은 최대 ${MAX_UPLOAD_PHOTOS}장까지만 등록할 수 있습니다.`);
       return;
     }
 
@@ -260,14 +183,13 @@ export const AiEstimateSimulator: React.FC<AiEstimateSimulatorProps> = ({
 
     const validItems: UploadedPhoto[] = [];
     const errors: string[] = [];
-
     const filesToProcess = rawFiles.slice(0, remainingSlots);
 
     for (let i = 0; i < filesToProcess.length; i++) {
       const file = filesToProcess[i];
       const check = validateImageFileBeforeUpload(file);
       if (!check.valid) {
-        errors.push(check.errorMessage || `${file.name}: 지원하지 않는 파일`);
+        errors.push(check.errorMessage || `${file.name}: 지원하지 않는 파일 형식`);
         continue;
       }
 
@@ -277,16 +199,12 @@ export const AiEstimateSimulator: React.FC<AiEstimateSimulatorProps> = ({
         validItems.push({
           id: `upload-${Date.now()}-${i}`,
           url: processed.dataUrl,
-          name: file.name || `스마트폰_현장사진_${uploadedPhotos.length + i + 1}.jpg`,
+          name: file.name || `현장사진_${uploadedPhotos.length + i + 1}.jpg`,
           specSummary: processed.specSummary,
           isPortrait,
         });
       } catch (err) {
-        errors.push(
-          err instanceof Error
-            ? err.message
-            : '사진 처리 중 일시적 오류가 발생했습니다.'
-        );
+        errors.push(err instanceof Error ? err.message : '사진 압축 변환 중 오류');
       }
     }
 
@@ -308,17 +226,9 @@ export const AiEstimateSimulator: React.FC<AiEstimateSimulatorProps> = ({
         setFitContainMode(true);
       }
 
-      if (rawFiles.length > remainingSlots) {
-        setUploadNotice(
-          `최대 ${MAX_UPLOAD_PHOTOS}장 제한으로 인해 ${validItems.length}장이 추가되었습니다. (${lastItem.specSummary})`
-        );
-      } else {
-        setUploadNotice(
-          `✓ 스마트폰/PC 현장 사진 ${validItems.length}장 최적화 업로드 완료 (${lastItem.specSummary})`
-        );
-      }
-
-      triggerAiScan();
+      setUploadNotice(
+        `✓ 현장 사진 ${validItems.length}장 업로드 및 표준 최적화 완료 (${lastItem.specSummary})`
+      );
     }
   };
 
@@ -333,70 +243,231 @@ export const AiEstimateSimulator: React.FC<AiEstimateSimulatorProps> = ({
     setUploadError('');
   };
 
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    handleFilesSelected(e.dataTransfer.files);
+  const handleSelectPreset = (presetId: string) => {
+    const found = SAMPLE_PHOTO_PRESETS.find((p) => p.id === presetId);
+    if (!found) return;
+    setActivePresetId(presetId);
+    setActiveCategory(found.category);
+    setPyeong(found.defaultPyeong);
+    setUploadNotice('');
   };
 
-  const currentUploadedPhoto =
-    uploadedPhotos.length > 0
-      ? uploadedPhotos[Math.min(activeUploadedIndex, uploadedPhotos.length - 1)]
-      : null;
+  // Convert Preset Image URL to Base64 for Server Processing if using preset
+  const getSelectedPhotoBase64 = async (): Promise<string> => {
+    if (currentUploadedPhoto?.url) {
+      return currentUploadedPhoto.url;
+    }
+    // Fetch preset image and convert to data URL
+    try {
+      const response = await fetch(displayImage);
+      const blob = await response.blob();
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    } catch {
+      // Fallback 1x1 png if local asset fetch fails
+      return 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+    }
+  };
 
-  const currentPhotoKey = currentUploadedPhoto?.id || activePreset.id;
-  const isCurrentBroken = brokenPhotoIds[currentPhotoKey] || false;
+  // Trigger Real Gemini AI Analysis via Server (Strict 1,000 KRW Ticket Verification)
+  const handleStartRealAiAnalysis = async () => {
+    // 1. 유료회원 로그인 및 이용권 검증 (미결제 시 AI 분석 및 견적 엔진 실행 절대 차단)
+    if (!currentMember) {
+      if (onOpenMemberModal) {
+        onOpenMemberModal('profile');
+      }
+      return;
+    }
 
-  const displayImage =
-    currentUploadedPhoto?.url ||
-    matchedService.photos[0]?.url ||
-    activePreset.image ||
-    HERO_VISUAL;
+    const activeTickets = getMemberActiveTickets(currentMember.id);
+    if (!activeTickets || activeTickets.length === 0 || (currentMember.ticketBalance || 0) <= 0) {
+      if (onOpenMemberModal) {
+        onOpenMemberModal('tickets');
+      }
+      return;
+    }
 
-  const reportTitle =
-    isCustomWorkApplied && customWorkInput.trim()
-      ? `${customWorkInput.trim()} (${customSizeInput.trim() || `${pyeong}평 기준`})`
-      : currentUploadedPhoto
-      ? `고객 업로드 현장 사진 (${uploadedPhotos.length}장 · ${pyeong}평 기준)`
-      : activePreset.label;
+    const ticketToUse = activeTickets[0];
+
+    setCurrentStep('analyzing');
+    setAnalysisError('');
+    setApiKeyNotice('');
+
+    try {
+      const imageBase64 = await getSelectedPhotoBase64();
+
+      const response = await fetch('/api/estimate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          imageBase64,
+          category: activeCategory,
+          pyeong,
+          floor,
+          hasElevator,
+          additionalNotes,
+          ticketToken: ticketToUse.token,
+          ticketId: ticketToUse.ticketId,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.success) {
+        if (data.paymentRequired) {
+          if (onOpenMemberModal) {
+            onOpenMemberModal('tickets');
+          }
+        }
+        throw new Error(data.error || '견적 분석 중 오류가 발생했습니다.');
+      }
+
+      // 이용권 차감 처리
+      await markTicketUsed(ticketToUse.ticketId, {
+        category: activeCategory,
+        pyeong,
+      });
+
+      if (onMemberUpdated && currentMember) {
+        onMemberUpdated({
+          ...currentMember,
+          ticketBalance: Math.max(0, (currentMember.ticketBalance || 1) - 1),
+        });
+      }
+
+      if (data.isApiKeyMissing) {
+        setApiKeyNotice(data.message || 'API 키가 설정되지 않아 표준품셈 기준 계산이 적용되었습니다.');
+      } else if (data.isCircuitBreakerActive) {
+        setApiKeyNotice(data.message || '월간 시험 운영 예산 보호 모드가 적용되어 기본 표준품셈 기준 견적이 산출되었습니다.');
+      }
+
+      setAiAnalysis(data.aiAnalysis);
+      setCalculationResult(data.calculationReport);
+
+      // 회원 전용 견적 보관함에 영구 저장
+      if (currentMember) {
+        const storedId = `EST-${Date.now()}-${Math.floor(Math.random() * 9000 + 1000)}`;
+        await saveEstimate({
+          id: storedId,
+          userId: currentMember.id,
+          category: activeCategory,
+          categoryLabel:
+            SERVICES_DATA.find((s) => s.category === activeCategory)?.categoryLabel ||
+            activeCategory,
+          pyeong,
+          floor,
+          hasElevator,
+          ticketId: ticketToUse.ticketId,
+          totalEstimateMin: data.calculationReport?.priceRangeMin || 0,
+          totalEstimateMax: data.calculationReport?.priceRangeMax || 0,
+          supplyPriceMin: data.calculationReport?.supplyPriceMin || 0,
+          supplyPriceMax: data.calculationReport?.supplyPriceMax || 0,
+          vatMin: data.calculationReport?.vatMin || 0,
+          vatMax: data.calculationReport?.vatMax || 0,
+          damageSeverity: data.aiAnalysis?.damageSeverity || '보통',
+          createdAt: Date.now(),
+          analysisSummary: data.aiAnalysis?.surfaceCondition || '현장 상태 표준 분석 완료',
+          rawAnalysisData: data.aiAnalysis,
+          rawCalculationReport: data.calculationReport,
+        });
+      }
+
+      setCurrentStep('result');
+    } catch (err: unknown) {
+      console.error('AI Analysis failed:', err);
+      const errMsg = err instanceof Error ? err.message : '분석 중 오류가 발생했습니다.';
+      setAnalysisError(errMsg);
+      setCurrentStep('input');
+    }
+  };
+
+  const handleResetToInput = () => {
+    setCurrentStep('input');
+    setAnalysisError('');
+  };
 
   return (
-    <div className="mt-10 grid grid-cols-1 gap-8 lg:grid-cols-12">
-      {/* Left 6 cols: Smartphone Camera Capture + Sample Presets + Custom Work Input */}
-      <div className="flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-6 text-slate-900 shadow-xs lg:col-span-6">
-        <div>
-          <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="text-xs font-semibold text-orange-600">
-                AI 사진 30초 견적 · 스마트폰 촬영 및 앨범 업로드 완벽 지원
-              </p>
-              <h2 className="mt-0.5 text-lg font-bold text-slate-900">
-                현장 사진 업로드 (최대 10장) 및 희망 공사 입력
-              </h2>
+    <div className="mt-10 rounded-2xl border border-slate-200 bg-white p-6 text-slate-900 shadow-md sm:p-8">
+      {/* Step Tracker Header */}
+      <div className="border-b border-slate-100 pb-5">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-semibold text-orange-600">
+              <Sparkles className="h-4 w-4" />
+              <span>실제 Gemini 3.8 Flash 비전 모델 연동</span>
+              <span aria-hidden="true">·</span>
+              <span className="text-slate-500">2026 정부 공인 건설공사 표준품셈 산정</span>
+            </div>
+            <h2 className="mt-1 text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">
+              AI 사진 30초 정석 견적 산출기
+            </h2>
+          </div>
+
+          {/* Stepper Indicator */}
+          <div className="flex items-center gap-2 text-xs font-semibold">
+            <span
+              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 ${
+                currentStep === 'input'
+                  ? 'bg-orange-600 text-white'
+                  : 'bg-slate-100 text-slate-600'
+              }`}
+            >
+              1. 현장 사진 & 조건
+            </span>
+            <ChevronRight className="h-3.5 w-3.5 text-slate-400" />
+            <span
+              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 ${
+                currentStep === 'analyzing'
+                  ? 'bg-orange-600 text-white animate-pulse'
+                  : currentStep === 'result'
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-slate-100 text-slate-600'
+              }`}
+            >
+              2. AI 심층 분석 & 내역서
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* STEP 1 & 2: PHOTO UPLOAD & CONDITION INPUT */}
+      {currentStep === 'input' && (
+        <div className="mt-6 grid grid-cols-1 gap-8 lg:grid-cols-12">
+          {/* Left Column: Photo Uploader & Preview (6 cols) */}
+          <div className="space-y-4 lg:col-span-6">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="text-xs font-bold text-slate-900">
+                1. 현장 사진 등록 (스마트폰 촬영 또는 앨범 선택)
+              </label>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => cameraCaptureInputRef.current?.click()}
+                  disabled={uploadedPhotos.length >= MAX_UPLOAD_PHOTOS || isProcessingUpload}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-orange-500 disabled:bg-slate-300 cursor-pointer"
+                >
+                  <Smartphone className="h-3.5 w-3.5" />
+                  스마트폰 바로 촬영
+                </button>
+                <button
+                  type="button"
+                  onClick={() => albumInputRef.current?.click()}
+                  disabled={uploadedPhotos.length >= MAX_UPLOAD_PHOTOS || isProcessingUpload}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:bg-slate-300 cursor-pointer"
+                >
+                  <Images className="h-3.5 w-3.5 text-orange-400" />
+                  사진 선택 ({uploadedPhotos.length}/{MAX_UPLOAD_PHOTOS})
+                </button>
+              </div>
             </div>
 
-            {/* Dual Upload Buttons for Smartphone Users (Direct Camera vs Photo Album) */}
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => cameraCaptureInputRef.current?.click()}
-                disabled={uploadedPhotos.length >= MAX_UPLOAD_PHOTOS || isProcessingUpload}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-orange-600 px-3 py-2 text-xs font-bold text-white shadow-2xs transition-colors hover:bg-orange-500 disabled:cursor-not-allowed disabled:bg-slate-400 whitespace-nowrap cursor-pointer"
-              >
-                <Smartphone className="h-3.5 w-3.5" />
-                스마트폰 바로 촬영
-              </button>
-              <button
-                type="button"
-                onClick={() => albumInputRef.current?.click()}
-                disabled={uploadedPhotos.length >= MAX_UPLOAD_PHOTOS || isProcessingUpload}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400 whitespace-nowrap cursor-pointer"
-              >
-                <Images className="h-3.5 w-3.5 text-orange-400" />
-                사진첩/PC 선택 ({uploadedPhotos.length}/{MAX_UPLOAD_PHOTOS})
-              </button>
-            </div>
-
-            {/* Hidden Input 1: Direct Smartphone Rear Camera Capture */}
+            {/* Hidden Inputs */}
             <input
               ref={cameraCaptureInputRef}
               type="file"
@@ -408,8 +479,6 @@ export const AiEstimateSimulator: React.FC<AiEstimateSimulatorProps> = ({
               }}
               className="hidden"
             />
-
-            {/* Hidden Input 2: Multi-Photo Album / PC File Picker (JPG/PNG/WEBP) */}
             <input
               ref={albumInputRef}
               type="file"
@@ -421,155 +490,12 @@ export const AiEstimateSimulator: React.FC<AiEstimateSimulatorProps> = ({
               }}
               className="hidden"
             />
-          </div>
 
-          {/* Uploadable Photo Size & Smartphone Compatibility Guide Bar */}
-          <div className="mt-3 flex flex-col gap-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className="flex items-center gap-1.5 font-medium text-slate-700">
-                <Info className="h-3.5 w-3.5 text-orange-600 shrink-0" />
-                <span>
-                  <strong>업로드 가능 사진 규격:</strong> 권장 1200×900px ({PHOTO_UPLOAD_SPECS.supportedFormatsLabel}) ·{' '}
-                  <strong className="text-orange-700">1장당 최대 {PHOTO_UPLOAD_SPECS.maxFileSizeMB}MB 이하</strong>
-                </span>
-              </span>
-              <span className="font-mono-num text-[10px] text-slate-500">
-                평균 200~350KB 자동 경량화
-              </span>
-            </div>
-            <p className="text-[11px] font-medium text-amber-800">
-              ※ {PHOTO_UPLOAD_SPECS.heicGuideText}
-            </p>
-          </div>
-
-          {/* 4 Sample Presets */}
-          <div className="mt-4">
-            <p className="text-xs font-semibold text-slate-700">
-              실제 시공 현장 샘플로 즉시 30초 견적 테스트하기:
-            </p>
-            <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-              {SAMPLE_PHOTO_PRESETS.map((preset) => {
-                const isActive =
-                  !isCustomWorkApplied &&
-                  uploadedPhotos.length === 0 &&
-                  activePresetId === preset.id;
-                return (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    onClick={() => handleSelectPreset(preset.id)}
-                    className={`flex items-center justify-between rounded-lg border px-3 py-2.5 text-left text-xs font-semibold transition-colors cursor-pointer ${
-                      isActive
-                        ? 'border-orange-600 bg-orange-50/70 text-slate-900'
-                        : 'border-slate-200 bg-slate-50 text-slate-600 hover:border-slate-300 hover:bg-white'
-                    }`}
-                  >
-                    <span className="truncate">{preset.label}</span>
-                    <span className="ml-2 shrink-0 font-mono-num text-[11px] text-orange-600">
-                      선택
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Free-Form Construction Work & Actual Size Input Box */}
-          <div className="mt-4 rounded-xl border border-orange-200 bg-orange-50/40 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <label
-                htmlFor="custom-work-input"
-                className="flex items-center gap-1.5 text-xs font-bold text-slate-900"
-              >
-                <Sparkles className="h-3.5 w-3.5 text-orange-600" />
-                위 4가지 외 원하는 공사를 자유롭게 입력해 보세요 (자유 공종·보수 견적)
-              </label>
-              {isCustomWorkApplied && (
-                <span className="text-[11px] font-bold text-orange-600">
-                  ✓ 자유 입력 공종 품셈 반영됨
-                </span>
-              )}
-            </div>
-
-            {/* Quick Example Buttons */}
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
-              <span className="text-[11px] font-medium text-slate-500">예시 클릭:</span>
-              {CUSTOM_WORK_EXAMPLES.map((ex, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={() => handleApplyCustomExample(ex)}
-                  className="rounded-md border border-slate-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-700 transition-colors hover:border-orange-500 hover:text-orange-600 cursor-pointer"
-                >
-                  {ex.workTitle.split(' ')[0]} {ex.workTitle.split(' ')[1]}{' '}
-                  {ex.workTitle.split(' ')[2]}
-                </button>
-              ))}
-            </div>
-
-            <div className="mt-2.5 space-y-2">
-              <input
-                id="custom-work-input"
-                type="text"
-                value={customWorkInput}
-                onChange={(e) => setCustomWorkInput(e.target.value)}
-                placeholder="예: 아스팔트 싱글 지붕 보수, 콘크리트 블럭 담장 재시공, 상가 계단 타일 보수 등"
-                className="w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:border-orange-600 focus:outline-none"
-              />
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <div className="relative flex-1">
-                  <Ruler className="pointer-events-none absolute top-2.5 left-3 h-3.5 w-3.5 text-slate-400" />
-                  <input
-                    type="text"
-                    value={customSizeInput}
-                    onChange={(e) => setCustomSizeInput(e.target.value)}
-                    placeholder="실측 사이즈 기재 (예: 가로 12m × 높이 1.8m, 또는 면적 약 8평)"
-                    className="w-full rounded-lg border border-slate-300 bg-white py-2 pr-3 pl-8 text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:border-orange-600 focus:outline-none"
-                  />
-                </div>
-                <button
-                  type="button"
-                  onClick={handleApplyUserCustomInput}
-                  className="rounded-lg bg-orange-600 px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-orange-500 whitespace-nowrap cursor-pointer"
-                >
-                  자유 입력 공종으로 30초 견적 산출
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Mandatory Photo Shooting & Actual Size Precaution Box */}
-          <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50/80 p-3.5 text-xs text-slate-800">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-              <div className="space-y-1 leading-relaxed">
-                <p className="font-bold text-slate-900">
-                  [필독] 스마트폰 현장 촬영 및 정확한 AI 표준품셈 물량 산출 안내
-                </p>
-                <p className="text-slate-700">
-                  1. <strong className="font-semibold text-slate-900">크기 가늠용 표준대비물품 동시 촬영:</strong>{' '}
-                  시공대상물의 면적·길이·높이를 정확히 판독할 수 있도록{' '}
-                  <span className="font-semibold text-orange-700 underline underline-offset-2">
-                    줄자, 500ml 생수병, A4 용지, 성인 신발, 신용카드 등 크기를 비교할 수 있는 표준대비상품
-                  </span>
-                  을 대상물 옆에 두고 함께 촬영해 주세요. (최대 10장 업로드 가능)
-                </p>
-                <p className="text-slate-700">
-                  2. <strong className="font-semibold text-slate-900">지원 사진 형식 ({PHOTO_UPLOAD_SPECS.supportedFormatsLabel}):</strong>{' '}
-                  {PHOTO_UPLOAD_SPECS.heicGuideText}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Multi-Photo Upload & Preview Box (Up to 10 Photos) */}
-          <div
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={handleDrop}
-            onClick={() => albumInputRef.current?.click()}
-            className="group relative mt-4 cursor-pointer overflow-hidden rounded-xl border-2 border-dashed border-slate-300 bg-slate-900 transition-colors hover:border-orange-500"
-          >
-            <div className="relative aspect-16/9 w-full overflow-hidden bg-slate-950">
+            {/* Photo Viewer Frame */}
+            <div
+              onClick={() => albumInputRef.current?.click()}
+              className="group relative aspect-4/3 w-full cursor-pointer overflow-hidden rounded-xl border-2 border-dashed border-slate-300 bg-slate-950 transition-colors hover:border-orange-500"
+            >
               {!isCurrentBroken ? (
                 <img
                   src={displayImage}
@@ -578,376 +504,625 @@ export const AiEstimateSimulator: React.FC<AiEstimateSimulatorProps> = ({
                   onError={() =>
                     setBrokenPhotoIds((prev) => ({ ...prev, [currentPhotoKey]: true }))
                   }
-                  className={`h-full w-full transition-transform duration-200 ${
+                  className={`h-full w-full ${
                     currentUploadedPhoto && fitContainMode
                       ? 'object-contain'
                       : 'object-cover group-hover:scale-[1.01]'
-                  }`}
+                  } transition-transform duration-200`}
                 />
               ) : (
                 <div className="flex h-full w-full flex-col items-center justify-center bg-slate-800 p-6 text-center text-white">
                   <Wrench className="h-8 w-8 text-orange-400" />
-                  <p className="mt-2 text-sm font-semibold">{reportTitle}</p>
-                  <p className="mt-1 text-xs text-slate-300">
-                    정석공사 현장 분석 이미지 프리뷰
-                  </p>
+                  <p className="mt-2 text-sm font-semibold">사진 프리뷰</p>
                 </div>
               )}
 
-              {/* Top Indicator */}
-              <div className=" absolute top-3 right-3 left-3 flex flex-wrap items-center justify-between gap-2">
-                <span className="pointer-events-none truncate rounded bg-slate-950/85 px-3 py-1.5 text-xs font-semibold text-white">
+              {/* Scrim Overlay & Tag */}
+              <div className="absolute top-3 right-3 left-3 flex items-center justify-between gap-2">
+                <span className="truncate rounded bg-slate-950/85 px-2.5 py-1 text-xs font-semibold text-white">
                   {currentUploadedPhoto
-                    ? `업로드 사진 (${activeUploadedIndex + 1}/${uploadedPhotos.length}): ${currentUploadedPhoto.name}`
-                    : `분석 샘플: ${activePreset.label}`}
+                    ? `내 사진 (${activeUploadedIndex + 1}/${uploadedPhotos.length}): ${currentUploadedPhoto.name}`
+                    : `샘플 사진: ${activePreset.label}`}
                 </span>
-                <div className="flex items-center gap-1.5">
-                  {currentUploadedPhoto && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setFitContainMode((prev) => !prev);
-                      }}
-                      className="rounded bg-slate-900/90 px-2.5 py-1 text-[11px] font-semibold text-slate-200 hover:bg-slate-800 cursor-pointer"
-                    >
-                      {fitContainMode ? '화면 꽉 차게 보기' : '세로 사진 전체 보기'}
-                    </button>
-                  )}
-                  <span className="pointer-events-none shrink-0 rounded bg-orange-600/95 px-2.5 py-1 font-mono-num text-xs font-bold text-white">
-                    최대 {MAX_UPLOAD_PHOTOS}장 · 장당 20MB
-                  </span>
-                </div>
+                {currentUploadedPhoto && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setFitContainMode((prev) => !prev);
+                    }}
+                    className="rounded bg-slate-900/90 px-2 py-0.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-800 cursor-pointer"
+                  >
+                    {fitContainMode ? '꽉 차게 보기' : '세로 전체 보기'}
+                  </button>
+                )}
               </div>
 
-              {/* Processing or AI Scanning Compositor Overlay */}
-              {(isProcessingUpload || scanState === 'scanning') && (
-                <div className="absolute inset-0 bg-slate-950/65 backdrop-blur-[2px]">
-                  <div className="animate-ai-scan h-1 w-full bg-orange-500 shadow-[0_0_20px_rgba(249,115,22,0.95)]" />
-                  <div className="flex h-full flex-col items-center justify-center p-4 text-center text-white">
-                    <RefreshCw className="h-7 w-7 animate-spin text-orange-400" />
-                    <p className="mt-2 text-sm font-bold">
-                      {isProcessingUpload
-                        ? '스마트폰 촬영 사진 자동 방향 보정 및 용량 최적화 중...'
-                        : `건설부 표준품셈 기반 AI 물량·사이즈 분석 중... (${scanProgress}%)`}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-300">
-                      표준대비물품 스케일 대조 · 기능공/보통인부 품수 · 자재 할증률 계산 중
-                    </p>
-                  </div>
-                </div>
-              )}
-
-              {/* Bottom Scrim with Drag & Drop Prompt */}
-              <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-slate-950/90 via-slate-950/65 to-transparent px-4 py-3 text-white">
-                <div className="flex items-center gap-2 text-xs">
-                  <Upload className="h-4 w-4 text-orange-400 shrink-0" />
-                  <span className="truncate">
-                    스마트폰 촬영 사진 또는 앨범 사진(최대 10장)을 터치하여 추가하세요
-                  </span>
-                </div>
-                <span className="ml-2 shrink-0 text-xs font-semibold text-orange-400 underline">
-                  + 사진 추가
-                </span>
+              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-950/90 via-slate-950/60 to-transparent p-3 text-white">
+                <p className="text-xs font-medium">
+                  클릭하거나 사진을 드래그하여 업로드하세요 (최대 10장 지원)
+                </p>
               </div>
             </div>
-          </div>
 
-          {uploadNotice && (
-            <p className="mt-2 rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700">
-              {uploadNotice}
-            </p>
-          )}
-          {uploadError && (
-            <p className="mt-2 rounded-lg bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600">
-              {uploadError}
-            </p>
-          )}
-
-          {/* Uploaded Photos Thumbnail Strip (1 ~ 10 Slots) */}
-          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-            <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-slate-700">
-                견적 요청 업로드 사진 목록 ({uploadedPhotos.length} / {MAX_UPLOAD_PHOTOS}장)
-              </span>
-              {uploadedPhotos.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setUploadedPhotos([]);
-                    setActiveUploadedIndex(0);
-                    setUploadNotice('');
-                    setUploadError('');
-                  }}
-                  className="text-xs font-semibold text-slate-500 hover:text-red-600 cursor-pointer"
-                >
-                  전체 삭제
-                </button>
-              )}
-            </div>
-
-            {uploadedPhotos.length === 0 ? (
-              <p className="mt-1.5 text-xs text-slate-500">
-                상단 <strong>[스마트폰 바로 촬영]</strong> 또는 <strong>[사진첩/PC 선택]</strong> 버튼을 눌러 현장 사진을 올려주세요. (전체 전경, 근접 부위, 줄자/생수병 대비 사진 등 최대 10장)
+            {uploadNotice && (
+              <p className="rounded-lg bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700">
+                {uploadNotice}
               </p>
-            ) : (
-              <div className="mt-2.5 grid grid-cols-5 gap-2 sm:grid-cols-10">
-                {uploadedPhotos.map((photo, idx) => {
-                  const isCurrent = idx === activeUploadedIndex;
-                  return (
+            )}
+            {uploadError && (
+              <p className="rounded-lg bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600">
+                {uploadError}
+              </p>
+            )}
+
+            {/* Thumbnails Strip */}
+            {uploadedPhotos.length > 0 && (
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
+                  <span>업로드된 현장 사진 ({uploadedPhotos.length}장)</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUploadedPhotos([]);
+                      setActiveUploadedIndex(0);
+                    }}
+                    className="text-slate-400 hover:text-red-600 cursor-pointer"
+                  >
+                    전체 삭제
+                  </button>
+                </div>
+                <div className="mt-2 grid grid-cols-5 gap-2">
+                  {uploadedPhotos.map((p, idx) => (
                     <div
-                      key={photo.id}
+                      key={p.id}
                       onClick={() => setActiveUploadedIndex(idx)}
-                      className={`group relative aspect-square cursor-pointer overflow-hidden rounded-md border-2 ${
-                        isCurrent ? 'border-orange-600' : 'border-slate-200'
+                      className={`relative aspect-square cursor-pointer overflow-hidden rounded-lg border-2 ${
+                        idx === activeUploadedIndex ? 'border-orange-600 ring-2 ring-orange-500/30' : 'border-slate-200'
                       }`}
                     >
-                      <img
-                        src={photo.url}
-                        alt={photo.name}
-                        className="h-full w-full object-cover"
-                      />
-                      <span className="absolute bottom-0.5 left-0.5 rounded bg-slate-950/80 px-1 font-mono-num text-[9px] font-bold text-white">
-                        {idx + 1}
-                      </span>
+                      <img src={p.url} alt={p.name} className="h-full w-full object-cover" />
                       <button
                         type="button"
-                        onClick={(e) => handleRemoveUploadedPhoto(photo.id, e)}
-                        className="absolute top-0.5 right-0.5 rounded bg-red-600/90 p-0.5 text-white opacity-90 hover:bg-red-700 cursor-pointer"
-                        aria-label={`사진 ${idx + 1} 삭제`}
+                        onClick={(e) => handleRemoveUploadedPhoto(p.id, e)}
+                        className="absolute top-0.5 right-0.5 rounded bg-red-600/90 p-0.5 text-white hover:bg-red-700"
+                        title="삭제"
                       >
                         <Trash2 className="h-2.5 w-2.5" />
                       </button>
                     </div>
-                  );
-                })}
-                {uploadedPhotos.length < MAX_UPLOAD_PHOTOS && (
-                  <button
-                    type="button"
-                    onClick={() => albumInputRef.current?.click()}
-                    className="flex aspect-square flex-col items-center justify-center rounded-md border border-dashed border-slate-300 bg-white text-slate-500 hover:border-orange-500 hover:text-orange-600 cursor-pointer"
-                    title="사진 추가 업로드"
-                  >
-                    <Plus className="h-4 w-4" />
-                    <span className="text-[9px] font-semibold">추가</span>
-                  </button>
-                )}
+                  ))}
+                </div>
               </div>
             )}
+
+            {/* Sample Presets Selector */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-bold text-slate-800">
+                사진이 없으신가요? 실제 준공 현장 샘플로 테스트해 보세요:
+              </p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                {SAMPLE_PHOTO_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => handleSelectPreset(preset.id)}
+                    className={`rounded-lg border p-2.5 text-left text-xs font-semibold transition-colors cursor-pointer ${
+                      uploadedPhotos.length === 0 && activePresetId === preset.id
+                        ? 'border-orange-600 bg-white text-orange-600 shadow-2xs ring-1 ring-orange-500/20'
+                        : 'border-slate-200 bg-white/70 text-slate-700 hover:bg-white'
+                    }`}
+                  >
+                    <p className="truncate">{preset.label}</p>
+                    <p className="mt-0.5 font-mono-num text-[11px] text-slate-500">
+                      {preset.defaultPyeong}평 기준
+                    </p>
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
-          {/* Area Adjuster Control */}
-          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3.5">
-            <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
-              <span>시공 대상 환산 면적 (평수 조절 시 표준품셈 물량 자동 재산출)</span>
-              <span className="font-mono-num text-sm font-bold text-orange-600">
-                {pyeong}평 (약 {Math.round(pyeong * 3.3058)}㎡)
-              </span>
+          {/* Right Column: Construction Category & Detailed Specs Input (6 cols) */}
+          <div className="space-y-5 lg:col-span-6">
+            {/* Category Selector */}
+            <div>
+              <label className="block text-xs font-bold text-slate-900">
+                2. 공사 유형 선택
+              </label>
+              <div className="mt-2 grid grid-cols-3 gap-2">
+                {SERVICE_TABS.filter((t) => t.key !== 'all').map((tab) => {
+                  const isSelected = activeCategory === tab.key;
+                  return (
+                    <button
+                      key={tab.key}
+                      type="button"
+                      onClick={() => setActiveCategory(tab.key)}
+                      className={`rounded-lg border px-3 py-2 text-center text-xs font-semibold transition-all cursor-pointer ${
+                        isSelected
+                          ? 'border-orange-600 bg-orange-600 text-white shadow-xs'
+                          : 'border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white'
+                      }`}
+                    >
+                      {tab.label.split(' ')[0]}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-            <input
-              type="range"
-              min={3}
-              max={100}
-              value={pyeong}
-              onChange={(e) => setPyeong(Number(e.target.value))}
-              aria-label="현장 평수 조절"
-              className="mt-2 h-2 w-full cursor-pointer accent-orange-600"
-            />
-            <div className="mt-1 flex justify-between font-mono-num text-[11px] text-slate-500">
-              <span>3평 (소규모 보수/담장/화장실)</span>
-              <span>25평 (표준 상가)</span>
-              <span>50평</span>
-              <span>100평</span>
+
+            {/* Area (Pyeong) Range Slider & Manual Input */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-slate-900">
+                  3. 예상 시공 면적 (평수)
+                </label>
+                <div className="flex items-center gap-1 font-mono-num">
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={pyeong}
+                    onChange={(e) => setPyeong(Math.max(1, Number(e.target.value)))}
+                    className="w-16 rounded-md border border-slate-300 bg-white px-2 py-1 text-right text-sm font-bold text-orange-600 focus:border-orange-600 focus:outline-none"
+                  />
+                  <span className="text-xs font-semibold text-slate-600">평</span>
+                  <span className="text-xs text-slate-400">
+                    (약 {Math.round(pyeong * 3.3058)}㎡)
+                  </span>
+                </div>
+              </div>
+
+              <input
+                type="range"
+                min={3}
+                max={100}
+                value={pyeong}
+                onChange={(e) => setPyeong(Number(e.target.value))}
+                className="mt-3 h-2 w-full cursor-pointer accent-orange-600"
+              />
+              <div className="mt-1 flex justify-between font-mono-num text-[11px] text-slate-400">
+                <span>3평 (부분보수/욕실)</span>
+                <span>25평 (상가 표준)</span>
+                <span>50평</span>
+                <span>100평</span>
+              </div>
             </div>
+
+            {/* Floor & Elevator Conditions */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-900">
+                  4. 현장 층수
+                </label>
+                <select
+                  value={floor}
+                  onChange={(e) => setFloor(e.target.value)}
+                  className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 focus:border-orange-600 focus:outline-none"
+                >
+                  <option value="1층">1층 (지상)</option>
+                  <option value="2층">2층</option>
+                  <option value="3층">3층</option>
+                  <option value="4층 이상">4층 이상</option>
+                  <option value="지하 1층">지하 1층</option>
+                  <option value="지하 2층 이하">지하 2층 이하</option>
+                  <option value="옥상/루프탑">옥상 / 루프탑</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-900">
+                  5. 화물/승객용 엘리베이터
+                </label>
+                <select
+                  value={hasElevator ? 'yes' : 'no'}
+                  onChange={(e) => setHasElevator(e.target.value === 'yes')}
+                  className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-800 focus:border-orange-600 focus:outline-none"
+                >
+                  <option value="yes">엘리베이터 이용 가능</option>
+                  <option value="no">엘리베이터 없음 (사다리차/계단 양중)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Additional Note */}
+            <div>
+              <label className="block text-xs font-bold text-slate-900">
+                6. 추가 요청사항 및 현장 특이점 (선택)
+              </label>
+              <textarea
+                value={additionalNotes}
+                onChange={(e) => setAdditionalNotes(e.target.value)}
+                placeholder="예: 야간 공사 희망, 주방 타일 밑 누수 의심, 폐기물 엘리베이터 보양 필수 등"
+                rows={2}
+                className="mt-1.5 w-full rounded-lg border border-slate-300 p-2.5 text-xs text-slate-800 focus:border-orange-600 focus:outline-none"
+              />
+            </div>
+
+            {/* Standard Cost Assurance & 1,000 KRW Membership Status */}
+            {currentMember && (currentMember.ticketBalance || 0) > 0 ? (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-4 text-xs text-slate-800">
+                <div className="flex items-center justify-between font-bold text-emerald-900">
+                  <span className="flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-emerald-600" />
+                    {currentMember.name}님 (1,000원 유료회원)
+                  </span>
+                  <span className="px-2 py-0.5 bg-emerald-600 text-white rounded text-[11px] font-mono">
+                    보유 AI 견적권: {currentMember.ticketBalance}장
+                  </span>
+                </div>
+                <p className="mt-1 text-slate-600">
+                  분석 시작 클릭 시 이용권 1장이 사용되며, Gemini AI 비전 분석과 건설공사 표준품셈 일위대가 내역서가 즉시 산출됩니다.
+                </p>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-xs text-amber-950 space-y-1">
+                <div className="flex items-center justify-between font-bold text-amber-900">
+                  <span className="flex items-center gap-1.5">
+                    <Ticket className="w-4 h-4 text-orange-600" />
+                    1,000원 유료회원 전용 정밀 AI 분석 시스템
+                  </span>
+                  <span className="px-2 py-0.5 bg-orange-600 text-white rounded text-[11px] font-bold">
+                    1회 1,000원
+                  </span>
+                </div>
+                <p className="text-slate-700">
+                  건우 정석공사 AI 견적 서비스는 무분별한 서버 자원 낭비를 방지하고 실측 수준의 고정밀 분석을 위해 <strong>1,000원 유료 이용권</strong>으로 운영됩니다.
+                </p>
+                <p className="text-slate-500 text-[11px]">
+                  * 유료회원은 생활관리용품 전 품목 최대 26% 평생 할인 및 1년 무상 A/S가 보장됩니다.
+                </p>
+              </div>
+            )}
+
+            {/* Error Banner */}
+            {analysisError && (
+              <div className="p-3 bg-red-50 text-red-700 border border-red-200 rounded-xl text-xs flex items-center justify-between">
+                <span>{analysisError}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!currentMember) onOpenMemberModal?.('profile');
+                    else onOpenMemberModal?.('tickets');
+                  }}
+                  className="px-2.5 py-1 bg-red-600 text-white font-bold rounded text-[11px] ml-2 shrink-0"
+                >
+                  이용권 충전/확인
+                </button>
+              </div>
+            )}
+
+            {/* CTA Button */}
+            {currentMember && (currentMember.ticketBalance || 0) > 0 ? (
+              <button
+                type="button"
+                onClick={handleStartRealAiAnalysis}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-orange-600 py-4 text-base font-bold text-white shadow-lg shadow-orange-600/25 transition-all hover:bg-orange-500 cursor-pointer"
+              >
+                <Sparkles className="h-5 w-5" />
+                <span>1,000원 이용권 사용 & Gemini AI 정밀 견적 시작 (잔여: {currentMember.ticketBalance}장)</span>
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  if (!currentMember) {
+                    onOpenMemberModal?.('profile');
+                  } else {
+                    onOpenMemberModal?.('tickets');
+                  }
+                }}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 py-4 text-base font-bold text-white shadow-lg hover:bg-orange-600 transition-all cursor-pointer"
+              >
+                <Ticket className="h-5 w-5 text-orange-400" />
+                <span>
+                  {!currentMember
+                    ? '1,000원 유료회원 로그인 / 가입 후 AI 견적받기'
+                    : '1,000원 AI 견적 이용권 결제하기'}
+                </span>
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </div>
-      </div>
+      )}
 
-      {/* Right 6 cols: AI 30-Second Estimate Output Report (Based on Construction Standard Pumsem) */}
-      <div className="flex flex-col justify-between rounded-xl border border-slate-200 bg-slate-900 p-6 text-white shadow-xs lg:col-span-6">
-        <div>
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-4">
-            <div>
-              <p className="text-xs font-semibold text-orange-400">
-                AI 사진 30초 견적 리포트 · 정부 공인 건설공사 표준품셈 산정
-              </p>
-              <h3 className="mt-0.5 text-lg font-bold text-white">{reportTitle}</h3>
-            </div>
-            <span className="font-mono-num text-xs text-emerald-400">
-              분석 사진: {uploadedPhotos.length > 0 ? `${uploadedPhotos.length}장` : '샘플 1장'} ·{' '}
-              {scanState === 'scanning' ? '품셈 산출 중' : '표준품셈 산정 완료'}
+      {/* STEP 3: ANALYZING STATE (REAL API CALL) */}
+      {currentStep === 'analyzing' && (
+        <div className="my-12 flex flex-col items-center justify-center p-8 text-center">
+          <div className="relative flex h-20 w-20 items-center justify-center rounded-2xl bg-orange-50 text-orange-600 ring-8 ring-orange-100">
+            <RefreshCw className="h-10 w-10 animate-spin" />
+            <Sparkles className="absolute -top-1 -right-1 h-5 w-5 text-amber-500" />
+          </div>
+
+          <h3 className="mt-6 text-xl font-bold text-slate-900">
+            서버 측 Gemini 3.8 Flash가 현장 사진을 정밀 분석하고 있습니다
+          </h3>
+          <p className="mt-2 max-w-md text-sm text-slate-600">
+            사진 속 마감재 종류, 파손 부위, 철거 대상물, 폐기물 물량을 식별하고 건설공사 표준품셈 일위대가 기준을 매핑하고 있습니다. 잠시만 기다려 주세요...
+          </p>
+
+          <div className="mt-8 flex flex-wrap items-center justify-center gap-3 text-xs text-slate-500">
+            <span className="flex items-center gap-1 rounded-md bg-slate-100 px-2.5 py-1">
+              ✓ 이미지 포맷 및 해상도 최적화 검증
+            </span>
+            <span className="flex items-center gap-1 rounded-md bg-slate-100 px-2.5 py-1">
+              ✓ 표준품셈 공종 코드 대조
+            </span>
+            <span className="flex items-center gap-1 rounded-md bg-slate-100 px-2.5 py-1">
+              ✓ 2026 건설노임단가 연산
             </span>
           </div>
+        </div>
+      )}
 
-          {/* Standard Pumsem Verification Banner */}
-          <div className="mt-4 rounded-lg border border-orange-500/30 bg-orange-950/30 p-3.5">
+      {/* STEP 4: VERIFIABLE ESTIMATE RESULT REPORT */}
+      {currentStep === 'result' && calculationResult && (
+        <div className="mt-6 space-y-6">
+          {/* API Key or Error Warning Banner */}
+          {apiKeyNotice && (
+            <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-xs text-amber-900">
+              <div className="flex items-center gap-2 font-bold">
+                <Info className="h-4 w-4 text-amber-600" />
+                <span>{apiKeyNotice}</span>
+              </div>
+            </div>
+          )}
+          {analysisError && (
+            <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-xs text-red-700">
+              <div className="flex items-center gap-2 font-bold">
+                <AlertTriangle className="h-4 w-4 text-red-600" />
+                <span>{analysisError}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Top Result Banner */}
+          <div className="flex flex-col justify-between gap-4 rounded-xl bg-slate-950 p-6 text-white md:flex-row md:items-center">
+            <div>
+              <div className="flex flex-wrap items-center gap-2 text-xs text-orange-400">
+                <span>표준품셈 적용 공식 산출서</span>
+                <span aria-hidden="true">·</span>
+                <span>{calculationResult.categoryLabel}</span>
+                <span aria-hidden="true">·</span>
+                <span>{pyeong}평 ({calculationResult.squareMeters}㎡)</span>
+                <span aria-hidden="true">·</span>
+                <span>{floor} ({hasElevator ? '엘리베이터 보유' : '엘리베이터 없음'})</span>
+              </div>
+              <h3 className="mt-2 text-2xl font-bold tracking-tight text-white sm:text-3xl">
+                예상 견적: {Math.round(calculationResult.priceRangeMin / 10000).toLocaleString()}만 원 ~{' '}
+                <span className="text-orange-400">
+                  {Math.round(calculationResult.priceRangeMax / 10000).toLocaleString()}만 원
+                </span>
+                <span className="ml-2 text-xs font-semibold text-orange-300">({calculationResult.priceRangeBasis})</span>
+              </h3>
+              <p className="mt-1 text-xs text-slate-300">
+                * 부가가치세(VAT 10%) 포함 시: 약 {Math.round(calculationResult.priceRangeWithVatMin / 10000).toLocaleString()}만 원 ~ {Math.round(calculationResult.priceRangeWithVatMax / 10000).toLocaleString()}만 원 ({calculationResult.priceRangeWithVatBasis})
+              </p>
+              <p className="mt-0.5 text-xs text-slate-400">
+                * 확정 공사비는 현장 무료 방문 실측 후 최종 확정되며, 위 내역은 2026 표준품셈 및 노임단가 기반 사전 예비 견적입니다.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={handleResetToInput}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3.5 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700 cursor-pointer"
+              >
+                <RotateCcw className="h-3.5 w-3.5 text-orange-400" />
+                다른 조건/사진으로 재분석
+              </button>
+              <button
+                type="button"
+                onClick={() => onOpenCalculator(calculationResult.category, pyeong)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 px-3.5 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700 cursor-pointer"
+              >
+                <Calculator className="h-3.5 w-3.5 text-orange-400" />
+                셀프 계산기에서 수정
+              </button>
+            </div>
+          </div>
+
+          {/* AI Visual Findings Grid */}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            {/* Box 1: AI Detected Site Condition & Work Elements */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
+              <p className="flex items-center gap-1.5 text-xs font-bold text-orange-600">
+                <Camera className="h-4 w-4" />
+                AI 사진 육안 판독 결과
+              </p>
+              <p className="mt-2 text-sm font-bold text-slate-900">
+                {aiAnalysis?.surfaceCondition || '현장 상태 식별 완료'}
+              </p>
+              <p className="mt-1 font-mono-num text-xs text-slate-500">
+                작업 난이도: <strong className="text-slate-800">{aiAnalysis?.damageSeverity || '보통'}</strong> · 예상 폐기물: <strong className="text-slate-800">{aiAnalysis?.wasteTonsEstimated || `${calculationResult.waste.estimatedTons}톤`}</strong>
+              </p>
+
+              <div className="mt-3 border-t border-slate-200 pt-3">
+                <p className="text-xs font-semibold text-slate-700">식별된 시공/철거 대상 요소:</p>
+                <ul className="mt-1.5 space-y-1 text-xs text-slate-600">
+                  {(aiAnalysis?.detectedElements || [
+                    '바닥 및 벽체 철거 부위',
+                    '폐기물 적재 및 반출 동선',
+                    '현장 가설 및 보양 대상',
+                  ]).map((item, idx) => (
+                    <li key={idx} className="flex items-start gap-1.5">
+                      <CheckCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-orange-600" />
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+
+            {/* Box 2: Recommended Pumsem Scope */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
+              <p className="flex items-center gap-1.5 text-xs font-bold text-emerald-700">
+                <FileCheck2 className="h-4 w-4 text-emerald-600" />
+                국토교통부 표준품셈 권장 시공 공정
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                적용 기준: {calculationResult.pumsemStandardChapter}
+              </p>
+
+              <ul className="mt-3 space-y-2 text-xs text-slate-700">
+                {(aiAnalysis?.recommendedScope || [
+                  '바탕면 레이턴스 연삭 및 청소',
+                  '표준품셈 규격 자재 반입 및 정밀 시공',
+                  '폐기물 올바로 시스템 적법 반출',
+                ]).map((scope, idx) => (
+                  <li key={idx} className="flex items-start gap-1.5">
+                    <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[10px] font-bold text-emerald-800">
+                      {idx + 1}
+                    </span>
+                    <span className="font-medium text-slate-800">{scope}</span>
+                  </li>
+                ))}
+              </ul>
+
+              {aiAnalysis?.siteKeyRisk && (
+                <div className="mt-3 rounded-lg border border-orange-200 bg-white p-2.5 text-xs text-orange-900">
+                  <strong className="font-semibold text-orange-700">엔지니어 핵심 조언:</strong>{' '}
+                  {aiAnalysis.siteKeyRisk}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* CRITICAL: UNCERTAIN ITEMS REQUIRING ONSITE INSPECTION */}
+          <div className="rounded-xl border-2 border-amber-300 bg-amber-50/70 p-5 text-slate-900">
             <div className="flex items-start gap-2.5">
-              <FileCheck2 className="mt-0.5 h-4 w-4 shrink-0 text-orange-400" />
-              <div className="text-xs leading-relaxed">
-                <p className="font-bold text-orange-300">
-                  산정 기준: 건설부(국토교통부·한국건설기술연구원) 제정 ‘건설공사 표준품셈’ 및 시중노임단가
+              <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+              <div>
+                <p className="text-sm font-bold text-slate-900">
+                  [필독] 사진만으로 알 수 없어 무료 방문 실측 시 확인해야 하는 불확실 항목
                 </p>
-                <p className="mt-0.5 text-slate-300">
-                  적용 조항: {estimatedReport.appliedChapter}
+                <p className="mt-1 text-xs leading-relaxed text-slate-700">
+                  건축 시공 특성상 사진 겉면만으로는 내부 구조, 침투 깊이, 매립 상태를 단정할 수 없습니다. 정석공사는 덤터기 추가금을 방지하기 위해 아래 항목을 착공 전 현장에서 정밀 계측합니다.
                 </p>
-                <p className="mt-0.5 text-slate-400">
-                  세부 산식: {estimatedReport.appliedBasis}
-                </p>
+
+                <ul className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {(aiAnalysis?.uncertainItems || [
+                    '슬래브 및 바닥 몰탈층 두께 (레이저 레벨기 계측 필수)',
+                    '하부 방수층 누수 침투 심도 (수분 측정기 검사)',
+                    '벽체/바닥 내부 매립 배관 노후도 (수압 기밀 테스트)',
+                    '건물 관리실 엘리베이터 보양 기준 및 반출 시간대 제한',
+                  ]).map((item, idx) => (
+                    <li
+                      key={idx}
+                      className="flex items-center gap-2 rounded-lg border border-amber-200 bg-white/80 px-3 py-2 text-xs font-semibold text-amber-900"
+                    >
+                      <span className="text-amber-600">•</span>
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
               </div>
             </div>
           </div>
 
-          {/* Total Price Range Highlight */}
-          <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/80 p-5">
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <span className="text-xs font-medium text-slate-400">
-                표준품셈 기반 예상 시공비 ({customSizeInput.trim() ? `${customSizeInput.trim()} · ` : ''}{pyeong}평 / {Math.round(pyeong * 3.3)}㎡ 환산 · 1년 무상 A/S 포함)
-              </span>
-              <span className="text-xs text-orange-400">
-                평균 소요: {matchedService.duration}
-              </span>
+          {/* Itemized Pumsem Table */}
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <div className="border-b border-slate-100 bg-slate-50 px-5 py-3">
+              <p className="text-xs font-bold text-slate-900">
+                표준품셈 및 시중노임단가 기반 산출 내역서 (공식 기준 vs 자체 설정단가 투명 분리)
+              </p>
             </div>
-            <p className="mt-2 font-mono-num text-3xl font-bold tracking-tight text-white sm:text-4xl">
-              {estimatedReport.minPrice.toLocaleString()}만 원 ~{' '}
-              <span className="text-orange-400">
-                {estimatedReport.maxPrice.toLocaleString()}만 원
-              </span>
-            </p>
 
-            {/* 3-Column Itemized Cost Breakdown with Pumsem Details */}
-            <div className="mt-4 grid grid-cols-1 gap-3 border-t border-slate-800/90 pt-4 text-xs sm:grid-cols-3">
-              <div>
-                <p className="text-slate-400">
-                  KS 정품 자재비 (할증 {matchedService.pumsem.materialAllowancePct}% 반영)
-                </p>
-                <p className="mt-1 font-mono-num text-sm font-semibold text-white">
-                  약 {estimatedReport.materialCost.toLocaleString()}만 원
-                </p>
-              </div>
-              <div>
-                <p className="text-slate-400">표준품셈 직접노무비 (총 {estimatedReport.totalPum}품)</p>
-                <p className="mt-1 font-mono-num text-sm font-semibold text-white">
-                  약 {estimatedReport.laborCost.toLocaleString()}만 원
-                </p>
-                <p className="mt-0.5 font-mono-num text-[11px] text-slate-400">
-                  기능공 {estimatedReport.skilledPum}품 + 보통인부 {estimatedReport.generalPum}품
-                </p>
-              </div>
-              <div>
-                <p className="text-slate-400">공구손료·기계경비·폐기물</p>
-                <p className="mt-1 font-mono-num text-sm font-semibold text-white">
-                  약 {estimatedReport.wasteAndEquipCost.toLocaleString()}만 원
-                </p>
-                <p className="mt-0.5 text-[11px] text-slate-400">
-                  예상 폐기물: {activePreset.wasteTons}
-                </p>
-              </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="border-b border-slate-200 bg-slate-100/70 text-slate-600 font-semibold">
+                  <tr>
+                    <th className="py-2.5 pl-5 pr-2">공사 항목</th>
+                    <th className="py-2.5 px-2">단가 구분</th>
+                    <th className="py-2.5 px-2">산출 근거</th>
+                    <th className="py-2.5 px-2 text-center">수량</th>
+                    <th className="py-2.5 px-2 text-right">적용 단가</th>
+                    <th className="py-2.5 pr-5 pl-2 text-right">금액</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {calculationResult.itemizedItems.map((item, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50/70">
+                      <td className="py-3 pl-5 pr-2 font-semibold text-slate-900">{item.name}</td>
+                      <td className="py-3 px-2">
+                        <span
+                          className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-semibold whitespace-nowrap ${
+                            item.sourceType === '공식 표준품셈 기준'
+                              ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                              : 'bg-slate-100 text-slate-700 border border-slate-200'
+                          }`}
+                        >
+                          {item.sourceType}
+                        </span>
+                      </td>
+                      <td className="py-3 px-2 text-slate-500 text-[11px] leading-tight">{item.basis}</td>
+                      <td className="py-3 px-2 text-center font-mono-num text-slate-700 whitespace-nowrap">{item.quantity}</td>
+                      <td className="py-3 px-2 text-right font-mono-num text-slate-600 whitespace-nowrap">{item.unitPrice}</td>
+                      <td className="py-3 pr-5 pl-2 text-right font-mono-num font-bold text-slate-900 whitespace-nowrap">
+                        {item.amount.toLocaleString('ko-KR')}원
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="border-t-2 border-slate-200 bg-slate-50/80 font-bold">
+                  <tr>
+                    <td colSpan={5} className="py-3 pl-5 text-right text-slate-700">
+                      공급가액 (소계, VAT 별도)
+                    </td>
+                    <td className="py-3 pr-5 text-right font-mono-num text-sm text-slate-900">
+                      {calculationResult.subtotal.toLocaleString('ko-KR')}원
+                    </td>
+                  </tr>
+                  <tr>
+                    <td colSpan={5} className="py-2 pl-5 text-right text-xs font-normal text-slate-500">
+                      부가가치세 (VAT 10%)
+                    </td>
+                    <td className="py-2 pr-5 text-right font-mono-num text-xs font-normal text-slate-600">
+                      {calculationResult.vat.toLocaleString('ko-KR')}원
+                    </td>
+                  </tr>
+                  <tr className="border-t border-slate-200 text-sm">
+                    <td colSpan={5} className="py-3.5 pl-5 text-right text-orange-600">
+                      합계금액 (VAT 포함)
+                    </td>
+                    <td className="py-3.5 pr-5 text-right font-mono-num text-base font-extrabold text-orange-600">
+                      {calculationResult.totalWithVat.toLocaleString('ko-KR')}원
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
             </div>
           </div>
 
-          {/* Detected Site Requirements & Standard Scope */}
-          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-4">
-              <p className="text-xs font-semibold text-orange-400">
-                01. 사진·실측 사이즈 기반 감지 물량
-              </p>
-              <ul className="mt-2.5 space-y-2 text-xs leading-relaxed text-slate-300">
-                {isCustomWorkApplied && customWorkInput.trim() ? (
-                  <>
-                    <li className="flex items-start gap-2">
-                      <CheckCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-orange-400" />
-                      <span>요청 공정: {customWorkInput.trim()}</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <CheckCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-orange-400" />
-                      <span>
-                        입력 치수/물량: {customSizeInput.trim() || `환산 면적 약 ${pyeong}평 (${Math.round(pyeong * 3.3)}㎡)`}
-                      </span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <CheckCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-orange-400" />
-                      <span>
-                        첨부 현장 사진 {uploadedPhotos.length}장 (표준대비물품 스케일 판독 연동)
-                      </span>
-                    </li>
-                  </>
-                ) : (
-                  activePreset.detectedIssues.map((issue, idx) => (
-                    <li key={idx} className="flex items-start gap-2">
-                      <CheckCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-orange-400" />
-                      <span>{issue}</span>
-                    </li>
-                  ))
-                )}
-              </ul>
-            </div>
+          {/* Action CTAs */}
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <a
+              href={`tel:${DIRECT_PHONE}`}
+              className="flex items-center justify-center gap-2 rounded-xl border-2 border-slate-800 bg-slate-900 px-6 py-4 text-sm font-bold text-white transition-colors hover:bg-slate-800 whitespace-nowrap"
+            >
+              <Phone className="h-4 w-4 text-orange-400" />
+              <span>24시 직통 엔지니어 상담 ({DIRECT_PHONE})</span>
+            </a>
 
-            <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-4">
-              <p className="text-xs font-semibold text-emerald-400">
-                02. 표준품셈 적용 권장 공정
-              </p>
-              <ul className="mt-2.5 space-y-2 text-xs leading-relaxed text-slate-300">
-                {isCustomWorkApplied && customWorkInput.trim() ? (
-                  <>
-                    <li className="flex items-start gap-2">
-                      <CheckCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
-                      <span>기존 손상 부위 해체·정리 및 바탕면 보강 (보통인부 {estimatedReport.generalPum}품)</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <CheckCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
-                      <span>KS 정품 자재 반입 및 전문 기능공 본시공 (기능공 {estimatedReport.skilledPum}품)</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <CheckCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
-                      <span>공구손료(3%)·폐기물 적법 반출 및 1년 무상 시공 A/S 보증서 발급</span>
-                    </li>
-                  </>
-                ) : (
-                  activePreset.recommendedScope.map((scope, idx) => (
-                    <li key={idx} className="flex items-start gap-2">
-                      <CheckCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
-                      <span>{scope}</span>
-                    </li>
-                  ))
-                )}
-              </ul>
-            </div>
+            <button
+              type="button"
+              onClick={() =>
+                onOpenConsultation(
+                  `[실제 Gemini AI 사진 견적 결과 연동]\n• 공종: ${calculationResult.categoryLabel}\n• 면적: ${pyeong}평 (${calculationResult.squareMeters}㎡) / ${floor} / EL ${hasElevator ? '유' : '무'}\n• AI 판독 상태: ${aiAnalysis?.surfaceCondition || '식별 완료'}\n• 표준품셈 노무: 기능공 ${calculationResult.labor.skilledLaborManDays}품 + 보통인부 ${calculationResult.labor.generalLaborManDays}품\n• 예상 견적 범위: ${Math.round(calculationResult.priceRangeMin / 10000)}만 ~ ${Math.round(calculationResult.priceRangeMax / 10000)}만 원\n• 실측 필수 점검 항목: ${(aiAnalysis?.uncertainItems || []).join(', ')}`,
+                  calculationResult.categoryLabel
+                )
+              }
+              className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-orange-600 px-6 py-4 text-base font-bold text-white shadow-lg shadow-orange-600/25 transition-all hover:bg-orange-500 whitespace-nowrap cursor-pointer"
+            >
+              <span>이 AI 분석 내역으로 무료 방문실측 및 확정 견적서 신청</span>
+              <ArrowRight className="h-4 w-4" />
+            </button>
           </div>
         </div>
-
-        {/* Action Buttons */}
-        <div className="mt-6 flex flex-col gap-3 border-t border-slate-800 pt-5 sm:flex-row">
-          <button
-            type="button"
-            onClick={() => onOpenCalculator(activePreset.category, pyeong)}
-            className="flex items-center justify-center gap-2 rounded-lg border border-slate-700 bg-slate-800 px-4 py-3 text-xs font-semibold text-white transition-colors hover:bg-slate-700 whitespace-nowrap cursor-pointer"
-          >
-            <Calculator className="h-4 w-4 text-orange-400" />
-            표준품셈 셀프 계산기 열기
-          </button>
-          <button
-            type="button"
-            onClick={() =>
-              onOpenConsultation(
-                `[AI 표준품셈 30초 견적 연동] 대상: ${reportTitle} / 실측치수: ${
-                  customSizeInput.trim() || `${pyeong}평`
-                } / 업로드 사진: ${uploadedPhotos.length}장 / ${
-                  estimatedReport.appliedChapter
-                } 적용 / 총 노무 ${estimatedReport.totalPum}품 / 예상 범위 ${
-                  estimatedReport.minPrice
-                }~${estimatedReport.maxPrice}만 원`,
-                isCustomWorkApplied && customWorkInput.trim()
-                  ? `자유 공종: ${customWorkInput.trim()}`
-                  : matchedService.categoryLabel
-              )
-            }
-            className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-orange-600 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-orange-500 whitespace-nowrap cursor-pointer"
-          >
-            이 품셈 내역으로 확정 견적 · 무료 방문실측 받기
-            <ArrowRight className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
+      )}
     </div>
   );
 };

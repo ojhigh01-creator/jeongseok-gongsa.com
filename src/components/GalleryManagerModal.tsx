@@ -13,6 +13,11 @@ import {
   Info,
   AlertCircle,
   Save,
+  Users,
+  Ticket,
+  ShoppingBag,
+  Activity,
+  PlusCircle,
 } from 'lucide-react';
 import { ServiceItem, ServicePhotoItem } from '../data/constructionData';
 import {
@@ -23,6 +28,8 @@ import {
   CloudSyncState,
   PHOTO_UPLOAD_SPECS,
 } from '../utils/galleryStorage';
+import { getAllLocalMembers, getMemberOrders, addTicket, saveCurrentMember } from '../utils/memberStorage';
+import { MemberProfile, SupplyOrder } from '../types/membership';
 
 interface GalleryManagerModalProps {
   isOpen: boolean;
@@ -51,6 +58,28 @@ export const GalleryManagerModal: React.FC<GalleryManagerModalProps> = ({
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [photoSpecsBySlot, setPhotoSpecsBySlot] = useState<Record<string, string>>({});
   const [savedSlotId, setSavedSlotId] = useState<string | null>(null);
+
+  const [adminTab, setAdminTab] = useState<'gallery' | 'members' | 'orders' | 'cost'>('gallery');
+  const [membersList, setMembersList] = useState<MemberProfile[]>([]);
+  const [ordersList, setOrdersList] = useState<SupplyOrder[]>([]);
+  const [costSummary, setCostSummary] = useState<any>(null);
+
+  const reloadAdminData = () => {
+    setMembersList(getAllLocalMembers());
+    setOrdersList(getMemberOrders());
+    fetch('/api/estimate/cost-summary')
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.success) setCostSummary(d.summary);
+      })
+      .catch(() => {});
+  };
+
+  React.useEffect(() => {
+    if (isOpen) {
+      reloadAdminData();
+    }
+  }, [isOpen, adminTab]);
 
   const wasOpenRef = useRef<boolean>(false);
   const importJsonInputRef = useRef<HTMLInputElement | null>(null);
@@ -374,6 +403,33 @@ export const GalleryManagerModal: React.FC<GalleryManagerModalProps> = ({
           </div>
         </div>
 
+        {/* Admin Navigation Tabs */}
+        <div className="flex border-b border-slate-700 bg-slate-800 px-6 overflow-x-auto shrink-0">
+          {[
+            { id: 'gallery', label: '시공 갤러리 관리', icon: Images },
+            { id: 'members', label: `1,000원 회원 & 이용권 (${membersList.length})`, icon: Users },
+            { id: 'orders', label: `생활관리용품 주문 (${ordersList.length})`, icon: ShoppingBag },
+            { id: 'cost', label: 'AI 견적 비용 통제 현황', icon: Activity },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setAdminTab(tab.id as any)}
+                className={`flex items-center gap-2 py-3 px-4 text-xs font-bold border-b-2 transition-colors cursor-pointer shrink-0 ${
+                  adminTab === tab.id
+                    ? 'border-orange-500 text-orange-400 bg-slate-900/60'
+                    : 'border-transparent text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+
         {/* Status / Error Toast Banner */}
         {statusMessage && (
           <div className="flex items-center justify-between bg-emerald-600 px-6 py-2.5 text-xs font-bold text-white">
@@ -400,8 +456,9 @@ export const GalleryManagerModal: React.FC<GalleryManagerModalProps> = ({
           </div>
         )}
 
-        {/* Modal Body */}
-        <div className="grid flex-1 grid-cols-1 overflow-y-auto lg:grid-cols-12">
+        {/* TAB 1: Gallery Management Body */}
+        {adminTab === 'gallery' && (
+          <div className="grid flex-1 grid-cols-1 overflow-y-auto lg:grid-cols-12">
           {/* Left 4 cols: Service Category Selector & Photo Size Spec Box */}
           <div className="border-b border-slate-200 bg-slate-50 p-5 lg:col-span-4 lg:border-r lg:border-b-0">
             <p className="text-xs font-bold text-slate-800">
@@ -775,6 +832,217 @@ export const GalleryManagerModal: React.FC<GalleryManagerModalProps> = ({
             </div>
           </div>
         </div>
+        )}
+
+        {/* TAB 2: Members & Tickets Management */}
+        {adminTab === 'members' && (
+          <div className="flex-1 overflow-y-auto p-6 space-y-5 bg-white">
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
+              <div>
+                <h3 className="font-bold text-sm text-slate-900">건우 정석공사 등록 회원 목록</h3>
+                <p className="text-xs text-slate-500">1,000원 유료회원 전환 현황 및 보유 AI 견적권 실시간 관리</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-1 bg-orange-100 text-orange-800 rounded font-bold text-xs">
+                  총 회원: {membersList.length}명
+                </span>
+                <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 rounded font-bold text-xs">
+                  유료회원: {membersList.filter((m) => m.tier === 'paid_member').length}명
+                </span>
+              </div>
+            </div>
+
+            {membersList.length === 0 ? (
+              <div className="text-center py-12 text-slate-400 text-xs">
+                아직 가입된 회원이 없습니다. 고객이 웹사이트에서 로그인/가입하면 여기에 표시됩니다.
+              </div>
+            ) : (
+              <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold">
+                    <tr>
+                      <th className="p-3">성함</th>
+                      <th className="p-3">연락처</th>
+                      <th className="p-3">회원 등급</th>
+                      <th className="p-3 text-center">보유 이용권</th>
+                      <th className="p-3 text-center">누적 견적</th>
+                      <th className="p-3">가입일시</th>
+                      <th className="p-3 text-center">관리자 작업</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {membersList.map((m) => (
+                      <tr key={m.id} className="hover:bg-slate-50">
+                        <td className="p-3 font-bold text-slate-900">{m.name}</td>
+                        <td className="p-3 font-mono text-slate-700">{m.phone}</td>
+                        <td className="p-3">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[11px] font-bold ${
+                              m.tier === 'paid_member'
+                                ? 'bg-orange-100 text-orange-700'
+                                : 'bg-slate-100 text-slate-600'
+                            }`}
+                          >
+                            {m.tier === 'paid_member' ? '1,000원 유료회원' : '일반회원'}
+                          </span>
+                        </td>
+                        <td className="p-3 text-center font-bold text-orange-600 font-mono">
+                          {m.ticketBalance || 0}장
+                        </td>
+                        <td className="p-3 text-center font-mono">{m.totalSavedEstimates || 0}건</td>
+                        <td className="p-3 text-slate-500 text-[11px]">
+                          {new Date(m.joinedAt).toLocaleDateString('ko-KR')}
+                        </td>
+                        <td className="p-3 text-center">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const updated = {
+                                ...m,
+                                tier: 'paid_member' as const,
+                                ticketBalance: (m.ticketBalance || 0) + 1,
+                              };
+                              await saveCurrentMember(updated);
+                              reloadAdminData();
+                              showSavedToast(`✓ ${m.name} 고객님께 AI 견적 이용권 1장을 수동 지급했습니다.`);
+                            }}
+                            className="px-2.5 py-1 bg-slate-900 hover:bg-orange-600 text-white font-semibold rounded text-[11px] transition-colors"
+                          >
+                            +1장 지급
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 3: Supplies Orders Management */}
+        {adminTab === 'orders' && (
+          <div className="flex-1 overflow-y-auto p-6 space-y-5 bg-white">
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
+              <div>
+                <h3 className="font-bold text-sm text-slate-900">생활관리용품 주문 및 출고 관리</h3>
+                <p className="text-xs text-slate-500">배송지 확인 및 물류 출고 상태를 관리합니다</p>
+              </div>
+              <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 rounded font-bold text-xs">
+                총 주문: {ordersList.length}건
+              </span>
+            </div>
+
+            {ordersList.length === 0 ? (
+              <div className="text-center py-12 text-slate-400 text-xs">
+                아직 접수된 생활관리용품 주문이 없습니다.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {ordersList.map((ord) => (
+                  <div key={ord.orderId} className="border border-slate-200 rounded-xl p-4 bg-slate-50 space-y-2 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-slate-900">{ord.orderId}</span>
+                        <span className="text-slate-400">·</span>
+                        <span className="text-slate-500 font-mono">{new Date(ord.createdAt).toLocaleString('ko-KR')}</span>
+                      </div>
+                      <span className="px-2 py-0.5 rounded bg-emerald-600 text-white font-bold text-[11px]">
+                        결제 완료 ({ord.paymentMethod})
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                      <div>
+                        <div className="font-semibold text-slate-700">주문 품목:</div>
+                        <ul className="mt-1 space-y-0.5">
+                          {ord.items.map((it, idx) => (
+                            <li key={idx} className="font-medium text-slate-900">
+                              {it.productName} x {it.quantity}개 ({it.totalPrice.toLocaleString()}원)
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                      <div>
+                        <div className="font-semibold text-slate-700">받는 분 & 배송지:</div>
+                        <div className="text-slate-900 font-medium">
+                          {ord.userName} ({ord.userPhone})
+                        </div>
+                        <div className="text-slate-600 text-[11px]">
+                          {ord.deliveryAddress} {ord.detailAddress}
+                        </div>
+                        {ord.deliveryMemo && (
+                          <div className="text-slate-500 text-[11px]">요청: {ord.deliveryMemo}</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex justify-between items-center pt-2 border-t border-slate-200 font-bold">
+                      <span className="text-slate-600">결제 총액:</span>
+                      <span className="text-orange-600 font-mono text-sm">{ord.finalAmount.toLocaleString()}원</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 4: Cost Control & Circuit Breaker */}
+        {adminTab === 'cost' && (
+          <div className="flex-1 overflow-y-auto p-6 space-y-5 bg-white text-xs">
+            <div className="bg-slate-900 text-white p-5 rounded-2xl space-y-4">
+              <div>
+                <h3 className="font-bold text-base text-orange-400">Gemini AI 비용 통제 & 서킷 브레이커 실시간 현황</h3>
+                <p className="text-xs text-slate-300 mt-1">
+                  월 30,000원 이하 시험 운영을 위한 다층 보호 계층 (IP 제한 · 일일 100건 제한 · 월간 20,000원 예산 차단)
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center pt-3 border-t border-slate-800">
+                <div className="bg-slate-800 p-3 rounded-xl">
+                  <div className="text-slate-400 text-[11px]">오늘 AI 호출</div>
+                  <div className="text-lg font-bold text-white font-mono mt-0.5">
+                    {costSummary?.dailyCountToday || 0} / 100건
+                  </div>
+                </div>
+                <div className="bg-slate-800 p-3 rounded-xl">
+                  <div className="text-slate-400 text-[11px]">월간 누적 비용</div>
+                  <div className="text-lg font-bold text-orange-400 font-mono mt-0.5">
+                    {costSummary?.monthlyCostKRW || 0}원
+                  </div>
+                </div>
+                <div className="bg-slate-800 p-3 rounded-xl">
+                  <div className="text-slate-400 text-[11px]">월간 예산 잔여</div>
+                  <div className="text-lg font-bold text-emerald-400 font-mono mt-0.5">
+                    {costSummary?.monthlyBudgetRemainingKRW || 20000}원
+                  </div>
+                </div>
+                <div className="bg-slate-800 p-3 rounded-xl">
+                  <div className="text-slate-400 text-[11px]">서킷 브레이커</div>
+                  <div className={`text-sm font-bold font-mono mt-1 ${costSummary?.circuitBreakerTriggered ? 'text-red-400' : 'text-emerald-400'}`}>
+                    {costSummary?.circuitBreakerTriggered ? '작동 중 (차단)' : '정상 작동 (보호)'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Model pricing standards */}
+            <div className="border border-slate-200 rounded-xl p-4 bg-slate-50 space-y-2">
+              <h4 className="font-bold text-slate-800">적용 중인 AI 모델 및 단가 기준</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                <div className="bg-white p-2.5 rounded border border-slate-200">
+                  <span className="font-bold text-slate-900 block">메인 모델: gemini-3.8-flash</span>
+                  <span className="text-slate-500">입력 $0.15/1M, 출력 $0.60/1M 토큰 (호출당 약 0.4원)</span>
+                </div>
+                <div className="bg-white p-2.5 rounded border border-slate-200">
+                  <span className="font-bold text-slate-900 block">폴백 모델: gemini-3.1-flash-lite</span>
+                  <span className="text-slate-500">입력 $0.075/1M, 출력 $0.30/1M 토큰 (호출당 약 0.2원)</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Modal Footer */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-slate-50 px-6 py-3.5">
