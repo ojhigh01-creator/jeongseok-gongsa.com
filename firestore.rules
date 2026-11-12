@@ -1,6 +1,21 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    // ---------------------------------------------------------------------
+    // SECURITY NOTE (2026-11)
+    // This app has no Firebase Authentication at all: members "log in" with a
+    // phone number and the gallery editor is unlocked with a client-side PIN.
+    // Rules therefore cannot require request.auth for the writes the site
+    // itself performs without breaking the site for its owner. What is closed
+    // here is everything that the site does NOT need:
+    //   - bulk listing/reading of member, ticket, order and estimate data
+    //     (personal data such as names, phone numbers, addresses)
+    //   - deleting documents from these collections
+    // Writes stay open with schema validation until real authentication
+    // (Firebase Auth + an admin account) is added; see the repo report.
+    // ---------------------------------------------------------------------
+
     // Helper functions for validation
     function isValidGalleryConfig(data) {
       return data.keys().hasAll(['servicesJson', 'updatedAt'])
@@ -21,34 +36,101 @@ service cloud.firestore {
         && data.updatedAt is number;
     }
 
-    // Public read for all site visitors; validated write for gallery management
+    function isValidMember(data) {
+      return data.keys().hasAll(['id', 'phone', 'name', 'tier', 'joinedAt'])
+        && data.id is string
+        && data.id.size() > 0
+        && data.id.size() < 80
+        && data.phone is string
+        && data.phone.size() > 0
+        && data.phone.size() < 30
+        && data.name is string
+        && data.name.size() < 60
+        && data.tier in ['regular', 'paid_member']
+        && data.joinedAt is number;
+    }
+
+    function isValidTicket(data) {
+      return data.keys().hasAll(['ticketId', 'userId', 'userPhone', 'amount', 'status', 'createdAt'])
+        && data.ticketId is string
+        && data.ticketId.size() > 0
+        && data.ticketId.size() < 80
+        && data.userId is string
+        && data.amount is number
+        && data.amount >= 0
+        && data.status in ['active', 'used', 'refunded']
+        && data.createdAt is number;
+    }
+
+    function isValidSupplyOrder(data) {
+      return data.keys().hasAll(['orderId', 'userId', 'userName', 'userPhone', 'items', 'finalAmount', 'createdAt'])
+        && data.orderId is string
+        && data.orderId.size() > 0
+        && data.orderId.size() < 80
+        && data.userId is string
+        && data.items is list
+        && data.items.size() > 0
+        && data.finalAmount is number
+        && data.finalAmount >= 0
+        && data.createdAt is number;
+    }
+
+    function isValidEstimate(data) {
+      return data.keys().hasAll(['id', 'userId', 'category', 'ticketId', 'createdAt'])
+        && data.id is string
+        && data.id.size() > 0
+        && data.id.size() < 80
+        && data.userId is string
+        && data.category is string
+        && data.createdAt is number;
+    }
+
+    // Public read for all site visitors; validated write for gallery management.
+    // Deletes are no longer allowed: the app only ever creates/overwrites.
     match /gallery_config/{configId} {
       allow read: if true;
       allow create, update: if configId == 'main' && isValidGalleryConfig(request.resource.data);
-      allow delete: if configId == 'main';
+      allow delete: if false;
     }
 
     match /gallery_photos/{photoId} {
       allow read: if true;
       allow create, update: if isValidGalleryPhoto(request.resource.data);
-      allow delete: if true;
+      allow delete: if false;
     }
 
     // Jeongseok Membership & Paid Estimate System rules
+    // users: single-document lookup is still needed for phone-number login.
+    // Listing the whole collection (bulk personal-data scrape) is denied.
     match /users/{userId} {
-      allow read, write: if true;
+      allow get: if true;
+      allow list: if false;
+      allow create, update: if isValidMember(request.resource.data)
+        && request.resource.data.id == userId;
+      allow delete: if false;
     }
 
+    // The site never reads these three collections from a browser, so reads
+    // are closed outright; writes carry the schema checks the app needs.
     match /tickets/{ticketId} {
-      allow read, write: if true;
+      allow read: if false;
+      allow create, update: if isValidTicket(request.resource.data)
+        && request.resource.data.ticketId == ticketId;
+      allow delete: if false;
     }
 
     match /supply_orders/{orderId} {
-      allow read, write: if true;
+      allow read: if false;
+      allow create, update: if isValidSupplyOrder(request.resource.data)
+        && request.resource.data.orderId == orderId;
+      allow delete: if false;
     }
 
     match /user_estimates/{estimateId} {
-      allow read, write: if true;
+      allow read: if false;
+      allow create, update: if isValidEstimate(request.resource.data)
+        && request.resource.data.id == estimateId;
+      allow delete: if false;
     }
   }
 }

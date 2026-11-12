@@ -81,17 +81,18 @@ export default function App() {
     undefined
   );
 
-  // Admin Photo Edit Mode state (Default: TRUE so owner can immediately upload/replace photos, with 1-click toggle to preview customer view)
+  // Admin Photo Edit Mode state (Default: FALSE so every visitor sees the plain public view).
+  // The only way in is the PIN prompt behind the discreet footer trigger; a successful
+  // unlock is remembered in this browser only.
   const [isAdminMode, setIsAdminMode] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       if (params.get('visitor') === 'true' || params.get('admin') === 'false') {
         return false;
       }
-      const savedMode = window.localStorage.getItem('jeongseok_admin_mode');
-      if (savedMode === 'false') return false;
+      return window.localStorage.getItem('jeongseok_admin_mode') === 'true';
     }
-    return true;
+    return false;
   });
   const [adminAuthModalOpen, setAdminAuthModalOpen] = useState<boolean>(false);
   const [adminPinInput, setAdminPinInput] = useState<string>('');
@@ -134,6 +135,11 @@ export default function App() {
   const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const updateAndPersistServices = (nextServices: ServiceItem[]) => {
+    // Fail closed: only an admin-unlocked session may write the shared gallery to Firestore.
+    if (!isAdminMode) {
+      console.warn('[정석공사] 관리자 인증 없이 갤러리 수정 요청이 와서 무시했습니다.');
+      return;
+    }
     setServicesList(nextServices);
     setBrokenImages({});
     setCloudSyncState('syncing');
@@ -528,13 +534,6 @@ export default function App() {
     }
     setEditingCardId(null);
     setGalleryManagerOpen(false);
-  };
-
-  const handleEnableAdminModeDirectly = () => {
-    setIsAdminMode(true);
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem('jeongseok_admin_mode', 'true');
-    }
   };
 
   return (
@@ -1863,7 +1862,8 @@ export default function App() {
         prefilledCategory={consultCategory}
       />
 
-      <GalleryManagerModal
+      {/* Admin-only editor: not mounted at all unless the PIN check unlocked admin mode */}
+      {isAdminMode && <GalleryManagerModal
         isOpen={galleryManagerOpen}
         onClose={() => setGalleryManagerOpen(false)}
         servicesList={servicesList}
@@ -1876,7 +1876,7 @@ export default function App() {
             setActivePhotoIndexByCard({});
           });
         }}
-      />
+      />}
 
       {/* Admin Authentication Modal (Owner Only) */}
       {adminAuthModalOpen && (
